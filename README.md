@@ -67,7 +67,18 @@ TTS 侧剥完标记只是让它**不被念**；正文里那行 `<!--tts:…-->` 
 
 2026-10-15 实测：注释经 `DOMParser` 变成 comment 节点，再交给 vdom 转换时被转成**带尖括号的文本**渲染出来——于是卡片底下明晃晃挂着一行 `<!--tts:老大，……-->`。
 
-修在 `dsh-maid-vcp` 的 `patch/v6-inject.js`（v6.40）的 `parseFrag` 里：进 DOM 之前先 `stripHtmlComments()` 整块剥掉；未闭合的按 HTML 规范截断到末尾（护住流式中间帧，免得半截注释文字闪出来）。`<pre><code>` 里的注释示例已在 `protectCodeEntities` 转义成 `&lt;!--`，不受影响。
+修在 `dsh-maid-vcp` 的 `patch/v6-inject.js`，**两版才修对**：
+
+| 版本 | 挂在哪 | 结果 |
+| --- | --- | --- |
+| v6.40 | `parseFrag` 里，进 DOM 之前 `stripHtmlComments()` | **无效**，注释照样显形 |
+| v6.41 | `render` 入口最上游剥注释；剥完为空时返回**空 Fragment** | 生效 |
+
+v6.40 为什么没用：`<!--tts:…-->` 前后有空行时，会被切成**独立的 HTML 注释块**单独交给 `render`。这时处理链走完 `v` 已是空串，`if (!v) return null` 在 `parseFrag` **之前**就短路了——剥注释那行根本轮不到；而 `render` 返回 `null` 的语义是「我不渲染」，宿主随即 `return e.value`，**把注释原文当内容渲染**。
+
+所以 v6.41 两处一起改：① 剥注释**提到 `render` 入口**；② 剥完为空时返回**空 Fragment** 而非 `null`（判据是「原文有东西、剥完没东西」才返空；真空消息仍返 `null`——不吞内容）。未闭合的按 HTML 规范截断到末尾（护住流式中间帧）。`<pre><code>` 里的注释示例已在 `protectCodeEntities` 转义成 `&lt;!--`，不受影响。
+
+**铁律：钩子挂点必须在调用链入口，不是下游。** 这条在 TTS 侧（第一版挂在 `applyTtsPlaybackScope`）和渲染侧（v6.40 挂在 `parseFrag`）各栽了一次。
 
 **两个补丁必须配套**：只打 TTS 侧 → 注释不念但显形；只打渲染侧 → 注释不显形但照旧念全文。
 
