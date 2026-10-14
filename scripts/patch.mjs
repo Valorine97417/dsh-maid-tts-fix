@@ -3,12 +3,12 @@
  * 把 `patches/*.patch` 装进 DSH profile —— 可重放、可核对、可卸载。
  *
  * 用法：
- *   node scripts/patch.mjs install      # 复制补丁 + 登记 + pnpm install + 核对
- *   node scripts/patch.mjs install --dry-run   # 只说要做什么，不落盘
- *   node scripts/patch.mjs verify       # 只核对：登记、hash、落盘字节
- *   node scripts/patch.mjs remove       # 撤销登记与补丁文件，再 pnpm install
- *   node scripts/patch.mjs list         # 列出本仓带的补丁与目标版本
- *   node scripts/patch.mjs --profile <dir>   # 指定 profile（默认 desktop）
+ *   node scripts/patch.mjs list       # 列出本仓带的补丁与目标版本
+ *   node scripts/patch.mjs install    # 复制补丁 + 登记 + pnpm install + 核对
+ *   node scripts/patch.mjs verify     # 只核对：登记、hash、落盘字节
+ *   node scripts/patch.mjs remove     # 撤销登记与补丁文件，再 pnpm install
+ *   node scripts/patch.mjs install --dry-run    # 只说要做什么，不落盘
+ *   node scripts/patch.mjs verify --profile <dir>   # 指定 profile（默认 desktop）
  *
  * 为什么走 pnpm patch 而不是直接改 node_modules：
  *   改 node_modules 是**手改**——2026-10-14 实测，装一次别的插件触发重铺，
@@ -16,18 +16,16 @@
  *   把补丁记在 `pnpm-workspace.yaml`、hash 记在 lockfile 里，任何一次
  *   install / 重铺都会**自动重打**。所以这里只做"登记与核对"，不碰源码。
  *
- * 为什么要 hash 核对：
- *   `patch_hash` 就是 `.patch` 文件的 sha256。两边一对，就能确认"仓库里
- *   这份正本"和"profile 里真正生效的那份"是同一份——改了补丁却忘了重打，
- *   这一步会当场抓住。
+ * 体检逻辑全在 `lib/selfcheck.js`——那个模块给启动自检用，这里给命令行用，
+ * 同一份判据服务两个入口，免得改了补丁却只更新一处、另一处开始说谎。
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import process from 'node:process'
-import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { listPatches, inspectProfile, describe as describeRows } from '../lib/selfcheck.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '..')
@@ -43,30 +41,11 @@ function argValue(flag) {
   return index === -1 ? undefined : process.argv[index + 1]
 }
 
-/** 本仓带的所有补丁：`<包名>@<版本>.patch`。 */
-function listPatches() {
-  if (!fs.existsSync(PATCH_DIR)) return []
-  return fs.readdirSync(PATCH_DIR)
-    .filter(name => name.endsWith('.patch'))
-    .map(name => {
-      const file = path.join(PATCH_DIR, name)
-      const base = name.replace(/\.patch$/, '')
-      const at = base.lastIndexOf('@')
-      return {
-        file,
-        name,
-        base,
-        packageName: at < 0 ? base : base.slice(0, at),
-        version: at < 0 ? '' : base.slice(at + 1),
-        bytes: fs.statSync(file).size,
-        sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
-      }
-    })
-}
-
 function resolveProfile() {
   const explicit = argValue('--profile')
   if (explicit !== undefined) return path.resolve(explicit)
+  const fromEnv = process.env.DSH_PROFILE_DIR
+  if (typeof fromEnv === 'string' && fromEnv.length > 0 && fs.existsSync(fromEnv)) return fromEnv
   return path.join(os.homedir(), '.dsh', 'profiles', 'desktop')
 }
 
@@ -82,7 +61,7 @@ const profilePatchDir = path.join(profile, 'patches')
  * 只为了改两行不划算，而且**注释会丢**——pnpm 自己重写时也一样丢，但我们
  * 至少不该主动毁掉人家写的东西。所以走文本替换，块不存在才追加。
  *
- * @returns {{ text: string, changed: boolean, mode: 'added' | 'updated' | 'same' }}
+ * @returns {{ text: string, mode: 'added' | 'updated' | 'same' }}
  */
 function upsertPatchedDependency(text, packageName, version, patchRelPath) {
   const key = `${packageName}@${version}`
@@ -92,7 +71,7 @@ function upsertPatchedDependency(text, packageName, version, patchRelPath) {
 
   if (headerAt < 0) {
     const tail = text.endsWith('\n') || text === '' ? '' : '\n'
-    return { text: `${text}${tail}\npatchedDependencies:\n${entry}\n`, changed: true, mode: 'added' }
+    return { text: `${text}${tail}\npatchedDependencies:\n${entry}\n`, mode: 'added' }
   }
 
   // 块的范围：从表头到下一个非缩进非空行为止。
@@ -105,12 +84,12 @@ function upsertPatchedDependency(text, packageName, version, patchRelPath) {
 
   if (at < 0) {
     lines.splice(endAt, 0, entry)
-    return { text: lines.join('\n'), changed: true, mode: 'added' }
+    return { text: lines.join('\n'), mode: 'added' }
   }
   const index = headerAt + 1 + at
-  if (lines[index] === entry) return { text, changed: false, mode: 'same' }
+  if (lines[index] === entry) return { text, mode: 'same' }
   lines[index] = entry
-  return { text: lines.join('\n'), changed: true, mode: 'updated' }
+  return { text: lines.join('\n'), mode: 'updated' }
 }
 
 /** 从 `pnpm-workspace.yaml` 摘掉一条登记（卸载用）。 */
@@ -123,20 +102,11 @@ function removePatchedDependency(text, key) {
   return { text: lines.join('\n'), changed: true }
 }
 
-/** lockfile 里记录的 patch_hash（同一条会出现多次，取第一个即可）。 */
-function lockPatchHash(packageName, version) {
-  if (!fs.existsSync(lockFile)) return undefined
-  const text = fs.readFileSync(lockFile, 'utf8')
-  const re = new RegExp(`^\\s+${packageName}@${version}:\\s+([0-9a-f]{64})\\s*$`, 'm')
-  const match = text.match(re)
-  return match ? match[1] : undefined
-}
-
 function runPnpm(args) {
   const useBundled = fs.existsSync(BUNDLED_PNPM)
   const command = useBundled ? process.execPath : 'pnpm'
   const argv = useBundled ? [BUNDLED_PNPM, ...args] : args
-  console.log(`\n$ ${useBundled ? 'pnpm' : 'pnpm'} ${args.join(' ')}   （cwd: ${profile}）`)
+  console.log(`\n$ pnpm ${args.join(' ')}   （cwd: ${profile}）`)
   const result = spawnSync(command, argv, { cwd: profile, stdio: 'inherit', shell: false })
   if (result.error) throw result.error
   return result.status ?? 1
@@ -151,32 +121,10 @@ function backupOnce(file, tag) {
   return target
 }
 
-/** 检查上游包文件里是否真带补丁特征。 */
-function checkApplied(patches) {
-  const rows = []
-  for (const patch of patches) {
-    const root = path.join(profile, 'node_modules', patch.packageName)
-    const markers = [
-      { file: 'lib/client.js', marker: 'function stripTtsStyleBlocks(value) {' },
-      { file: 'lib/shared-DQIrhcy-.js', marker: 'function stripTtsStyleBlocks(value) {' },
-    ]
-    for (const { file, marker } of markers) {
-      const target = path.join(root, file)
-      if (!fs.existsSync(target)) {
-        rows.push({ patch: patch.base, file, state: '文件缺失' })
-        continue
-      }
-      const hit = fs.readFileSync(target, 'utf8').includes(marker)
-      rows.push({ patch: patch.base, file, state: hit ? '已应用' : '未应用' })
-    }
-  }
-  return rows
-}
-
 // ---------------------------------------------------------------- 子命令
 
 function cmdList() {
-  const patches = listPatches()
+  const patches = listPatches(PATCH_DIR)
   if (patches.length === 0) {
     console.log('patches/ 下没有补丁文件。')
     return 0
@@ -191,7 +139,7 @@ function cmdList() {
 }
 
 function cmdInstall() {
-  const patches = listPatches()
+  const patches = listPatches(PATCH_DIR)
   if (patches.length === 0) {
     console.error('patches/ 下没有补丁文件，无事可做。')
     return 1
@@ -203,7 +151,8 @@ function cmdInstall() {
   const dry = has('--dry-run')
   console.log(`profile：${profile}`)
 
-  let workspace = fs.readFileSync(workspaceFile, 'utf8')
+  const original = fs.readFileSync(workspaceFile, 'utf8')
+  let workspace = original
   const plans = []
 
   for (const patch of patches) {
@@ -226,20 +175,29 @@ function cmdInstall() {
     return 0
   }
 
-  const workspaceBackup = backupOnce(workspaceFile, 'ttsfix')
-  const lockBackup = backupOnce(lockFile, 'ttsfix')
-  if (workspaceBackup) console.log(`\n备份：${path.relative(REPO, workspaceBackup)}`)
-  if (lockBackup) console.log(`备份：${path.relative(REPO, lockBackup)}`)
+  // 只在真会改动时备份与写盘：登记本就正确却重写一遍，只会无谓地动 mtime，
+  // 让人误以为"补丁刚被改过"。
+  const workspaceChanged = workspace !== original
+  const copiesNeeded = plans.filter(plan => !plan.inPlace)
 
-  fs.mkdirSync(profilePatchDir, { recursive: true })
-  for (const plan of plans) {
-    if (!plan.inPlace) {
+  if (workspaceChanged) {
+    const workspaceBackup = backupOnce(workspaceFile, 'ttsfix')
+    const lockBackup = backupOnce(lockFile, 'ttsfix')
+    if (workspaceBackup) console.log(`\n备份：${path.relative(REPO, workspaceBackup)}`)
+    if (lockBackup) console.log(`备份：${path.relative(REPO, lockBackup)}`)
+    fs.writeFileSync(workspaceFile, workspace, 'utf8')
+    console.log(`  写入 pnpm-workspace.yaml`)
+  } else {
+    console.log('\n登记无变化，跳过写盘')
+  }
+
+  if (copiesNeeded.length > 0) {
+    fs.mkdirSync(profilePatchDir, { recursive: true })
+    for (const plan of copiesNeeded) {
       fs.copyFileSync(plan.patch.file, plan.target)
       console.log(`  复制 ${plan.rel}（${plan.patch.bytes} 字节）`)
     }
   }
-  fs.writeFileSync(workspaceFile, workspace, 'utf8')
-  console.log(`  写入 pnpm-workspace.yaml`)
 
   const status = runPnpm(['install'])
   if (status !== 0) {
@@ -250,43 +208,39 @@ function cmdInstall() {
 }
 
 function cmdVerify() {
-  const patches = listPatches()
-  let ok = true
+  const { ok, rows, patches } = inspectProfile(profile, PATCH_DIR)
 
   console.log(`profile：${profile}\n`)
 
-  const workspace = fs.existsSync(workspaceFile) ? fs.readFileSync(workspaceFile, 'utf8') : ''
-  for (const patch of patches) {
-    const key = `${patch.packageName}@${patch.version}`
-    const registered = new RegExp(`^\\s+${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*patches/${patch.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm').test(workspace)
-    console.log(`${registered ? '✓' : '✗'} 登记：pnpm-workspace.yaml 的 patchedDependencies → ${key}`)
-    if (!registered) ok = false
+  if (patches.length === 0) {
+    console.error(`✗ patches/ 下没有补丁正本（${PATCH_DIR}）`)
+    return 1
+  }
 
-    const hash = lockPatchHash(patch.packageName, patch.version)
-    if (hash === undefined) {
-      console.log(`✗ lockfile：没有 ${key} 的 patch_hash（跑一次 pnpm install）`)
-      ok = false
-    } else if (hash !== patch.sha256) {
-      console.log(`✗ lockfile hash 与补丁正本不符\n    正本：${patch.sha256}\n    锁内：${hash}\n    → 补丁改过但没重打：node scripts/patch.mjs install`)
-      ok = false
+  for (const row of rows) {
+    const { patch } = row
+    console.log(`${row.registered ? '✓' : '✗'} 登记：pnpm-workspace.yaml 的 patchedDependencies → ${patch.base}`)
+    if (row.hash === undefined) {
+      console.log(`✗ lockfile：没有 ${patch.base} 的 patch_hash（跑一次 pnpm install）`)
+    } else if (!row.hashMatches) {
+      console.log(`✗ lockfile hash 与补丁正本不符\n    正本：${patch.sha256}\n    锁内：${row.hash}\n    → 补丁改过但没重打：node scripts/patch.mjs install`)
     } else {
-      console.log(`✓ lockfile hash 与补丁正本一致：${hash.slice(0, 16)}…`)
+      console.log(`✓ lockfile hash 与补丁正本一致：${row.hash.slice(0, 16)}…`)
     }
-
-    for (const row of checkApplied([patch])) {
-      const good = row.state === '已应用'
-      console.log(`${good ? '✓' : '✗'} 落盘：${row.file} ${row.state}`)
-      if (!good) ok = false
+    for (const item of row.applied) {
+      console.log(`${item.state === 'applied' ? '✓' : '✗'} 落盘：${item.file} ${item.state === 'applied' ? '已应用' : item.state === 'missing-file' ? '文件缺失' : '未应用'}`)
     }
   }
 
   console.log(ok ? '\n全部核对通过。' : '\n有未通过项，见上。')
+  if (!ok) for (const line of describeRows(rows)) console.log(`  · ${line}`)
   return ok ? 0 : 1
 }
 
 function cmdRemove() {
-  const patches = listPatches()
+  const patches = listPatches(PATCH_DIR)
   let workspace = fs.existsSync(workspaceFile) ? fs.readFileSync(workspaceFile, 'utf8') : ''
+  const original = workspace
   let changed = false
   for (const patch of patches) {
     const result = removePatchedDependency(workspace, `${patch.packageName}@${patch.version}`)
@@ -306,7 +260,7 @@ function cmdRemove() {
     console.log('\n（--dry-run，未写盘）')
     return 0
   }
-  if (changed) {
+  if (changed && workspace !== original) {
     backupOnce(workspaceFile, 'ttsfix-remove')
     fs.writeFileSync(workspaceFile, workspace, 'utf8')
     console.log('  已从 patchedDependencies 摘除登记')
