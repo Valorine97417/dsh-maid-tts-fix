@@ -1,0 +1,61 @@
+{
+  "purpose": "小困 TTS 童声参照样本（靶子）",
+  "picked": ["09", "04", "02"],
+  "pickedAt": "2026-10-14",
+  "pickedBy": "老大（试听页挑选，原话「编号9、4、2这三个不错」）",
+  "source": {
+    "endpoint": "https://api.xiaomimimo.com/v1/chat/completions",
+    "model": "mimo-v2.5-tts-voicedesign",
+    "audio": { "format": "wav" },
+    "stream": false,
+    "text": "21:29 那次朗读的原文（_probe/tts-target-text.txt）",
+    "prompt": "desktop profile cordis.patch.yml 的 voiceDesignPrompt（v6 童声版，2026-10-14 版）",
+    "note": "同一条件连抽 10 次，每次音色都不同（服务端独立采样，无 seed/temperature 控制）。本目录三个是老大从中挑出的。"
+  },
+  "files": [
+    {
+      "name": "小困童声参照-09.wav",
+      "from": "pick-09.wav",
+      "md5": "13c2b70aeddfb328e247bd8f889ed03a",
+      "bytes": 2880044,
+      "dur": 60.0,
+      "f0_med": 266.7,
+      "f0_p10": 228.6,
+      "f0_p90": 358.2,
+      "f0_iqr": 69.3,
+      "rms_cv": 0.8
+    },
+    {
+      "name": "小困童声参照-04.wav",
+      "from": "pick-04.wav",
+      "md5": "ed2c97cd6168646dd8cc57af6a05165c",
+      "bytes": 3256364,
+      "dur": 67.8,
+      "f0_med": 292.7,
+      "f0_p10": 237.6,
+      "f0_p90": 369.2,
+      "f0_iqr": 70.7,
+      "rms_cv": 0.858
+    },
+    {
+      "name": "小困童声参照-02.wav",
+      "from": "pick-02.wav",
+      "md5": "b42a59515d74c3747ed4460c4e8e602f",
+      "bytes": 2887724,
+      "dur": 60.2,
+      "f0_med": 300.0,
+      "f0_p10": 244.9,
+      "f0_p90": 381.0,
+      "f0_iqr": 71.4,
+      "rms_cv": 0.909
+    }
+  ],
+  "caveats": [
+    "小米 voicedesign 无法复现同一音色，这三个 wav 只能当「靶子」——照着它调提示词、或做本地克隆的参考音。",
+    "这三个样本由旧提示词（v6 六到九岁版）生成；2026-10-14 提示词已换成 C 组定稿（八到十一岁 + 清亮结实有厚度 + 中音区），全文见 prompt.md。",
+    "DSH 播报侧的 voiceRate 已由 1.2 退回 1（PCM 流式路径变速即变调，1.2× 曾整体升调约 3 个半音）。",
+    "样本采样率 16kHz（API wav 头），做克隆参考音够用但不算高保真。",
+    "wav 不进仓库（.gitignore 已排除 voice-refs/*.wav），本文件与 prompt.md 会入库。",
+    "本目录 2026-10-15 由 dsh-maid-preset 迁来——音色相关的知识（提示词 + 参照样本说明）统一归 tts-fix，人设包只专注人设预设与记忆。"
+  ]
+}

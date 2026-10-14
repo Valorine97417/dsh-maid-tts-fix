@@ -6,3 +6,7 @@ node_modules/
 # 那是**这台机器**的环境状态，不是本仓的内容——clone 到别的机器毫无意义，
 # 还会把别人的依赖清单带进来。备份本身照做，只是不进版本控制。
 .patch-backups/
+
+# 音色参照样本（约 8.7MB 音频，本地留档的「靶子」，不进仓库）。
+# 生成条件与声学数据见 voice-refs/README.json，提示词见 voice-refs/prompt.md。
+voice-refs/*.wav
