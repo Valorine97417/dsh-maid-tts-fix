@@ -18,13 +18,15 @@ VCP 卡片的样式写在 `<style>` 块里，而 CSS 是**多行**的。这个�
 
 不是"不知道念哪一段"，是**念了不该念的**——卡片做得越精致，念出来的垃圾越多。
 
-补丁做三件事，两处文件各改一遍（`lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一个函数的两个副本，漏一个就等于没修）：
+补丁做两件事：**别念出 CSS**（改两处文件各一遍），以及**只念重点**（见第一节之二）。`lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一个函数的两个副本，漏一个就等于没修。
 
 | 改动 | 做什么 |
 | --- | --- |
 | 加三个常量 + `stripTtsStyleBlocks()` | 先按**块**删 `<style>`/`<script>` 整段，再走原来的行内清洗 |
 | 改 `removeTtsMarkup` 首行 | 把新函数接在链首——函数写在旁边不等于会被调用 |
-| 加 `extractTtsSpokenOverride()` 并接进 `applyTtsPlaybackScope` | 认 `<!--tts:…-->` 标记，只念标记里那一段（见第三节） |
+| 加 `extractTtsSpokenOverride()` | 认 `<!--tts:…-->` 标记，把里面的文本抽出来 |
+| 接进 `messageText` 的**清洗之前** | 真正的入口。清洗会把标记当 HTML 标签吃掉（见第一节之二） |
+| 接进 `applyTtsPlaybackScope` | 双保险：自动播报那条链路不经过 `messageText` |
 
 流式中间帧也照顾到了：`<style>` 已开、`</style>` 还没到时，从开标签处截断，宁可少念半句也不念 CSS。
 
@@ -44,13 +46,30 @@ VCP 卡片的样式写在 `<style>` 块里，而 CSS 是**多行**的。这个�
 
 点了朗读，耳朵里只有标记里那句话。**没写标记就完全退回原逻辑**——这个补丁不改变任何既有行为，只是多给一条路。
 
-挂在 `applyTtsPlaybackScope` 上是有原因的：手动点朗读按钮走的就是它，而它拿到的是**未经清洗的原始消息文本**——此时标记还在，还没被 `removeTtsMarkup` 剥掉。挂在清洗之后的任何一步都拿不到标记。
+挂了**两处**，因为两条链路：
+
+| 挂在哪 | 管什么 | 为什么必须在这 |
+| --- | --- | --- |
+| `messageText`（清洗**之前**） | 手动点朗读按钮 | 这是真正的入口。它下面紧接着 `prepareTtsText` → `removeTtsMarkup`，而清洗用的 `MARKDOWN_HTML_TAG_RE = /<[^>\r\n]*>/g` 会把 `<!--tts:…-->` 整条当标签吃掉——挂晚了标记早没了 |
+| `applyTtsPlaybackScope` | 自动播报那条链路（不经过 `messageText`） | 它拿到的也是原始文本，标记还在 |
+
+第一版只挂了后者，结果手动朗读照旧念全文——白装一次。**清洗之前**四个字是这条补丁的全部要害。
 
 三条细节：
 
 - 标记内容会**压掉换行与连续空白**再念（`\s+` → 单空格），所以可以为了好读写成多行
 - 空白标记（`<!--tts:   -->`）视为没写，退回原逻辑
 - 有标记时**不加** smart 模式的收尾语（"后面还有内容…"）——摘要本就是完整的一段，后面没有"还有内容"
+
+### 渲染侧也得配合：注释不能显形
+
+TTS 侧剥完标记只是让它**不被念**；正文里那行 `<!--tts:…-->` 会不会**显示出来**是另一码事，归渲染层管。
+
+2026-10-15 实测：注释经 `DOMParser` 变成 comment 节点，再交给 vdom 转换时被转成**带尖括号的文本**渲染出来——于是卡片底下明晃晃挂着一行 `<!--tts:老大，……-->`。
+
+修在 `dsh-maid-vcp` 的 `patch/v6-inject.js`（v6.40）的 `parseFrag` 里：进 DOM 之前先 `stripHtmlComments()` 整块剥掉；未闭合的按 HTML 规范截断到末尾（护住流式中间帧，免得半截注释文字闪出来）。`<pre><code>` 里的注释示例已在 `protectCodeEntities` 转义成 `&lt;!--`，不受影响。
+
+**两个补丁必须配套**：只打 TTS 侧 → 注释不念但显形；只打渲染侧 → 注释不显形但照旧念全文。
 
 ## 二、为什么走 pnpm patch，而不是改 node_modules
 
@@ -83,7 +102,7 @@ node scripts/patch.mjs upgrade --to 3.1.0     # 指定目标版本，默认按�
 
 ```
 ✓ 登记：pnpm-workspace.yaml 的 patchedDependencies → dsh-xiaomi-tts@3.0.8
-✓ lockfile hash 与补丁正本一致：705725fe5d191f3a…
+✓ lockfile hash 与补丁正本一致：50a87d6ca955c9ba…
 ✓ 落盘：lib/client.js 已应用
 ✓ 落盘：lib/shared-DQIrhcy-.js 已应用
 ```
@@ -169,7 +188,8 @@ pnpm patch <包>@<版本>              → 这回才是干净的上游原样
 
 结果是**完全一致**。端到端演练（把补丁文件名伪装成旧版本、逼 `upgrade` 走完整
 流程）生成的补丁，sha256 与原正本逐字节相同。加上 `spoken-override` 那条编辑之后
-补丁变了（4120 → 6144 字节），重放仍逐字节可复现——`redo` 本身就是一次实测。
+补丁变了（4120 → 6144 字节），再加 `spoken-override-entry`（4120 → 6921 字节），
+重放仍逐字节可复现——`redo` 本身就是一次实测。
 
 ## 五、启动自检：它不会悄悄死掉
 

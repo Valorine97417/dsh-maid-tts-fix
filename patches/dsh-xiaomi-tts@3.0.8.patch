@@ -1,5 +1,5 @@
 diff --git a/lib/client.js b/lib/client.js
-index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..535a3b7515d1796b12a66639f37d44b34a7b4c8a 100644
+index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..6aabe306478d311919670aec473a99366779f9ea 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -303,11 +303,21 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
@@ -41,6 +41,18 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..535a3b7515d1796b12a66639f37d44b3
 +	if (override !== void 0) return override;
  	const scoped = applyTtsReadScope(value, resolveTtsReadScope(scope, automatic));
  	return scope === "smart" && automatic ? appendTtsSmartTruncationOutro(value, scoped, random) : scoped;
+ }
+@@ -1932,7 +1951,10 @@ function useSettingsSnapshot(scope) {
+ function messageText(legacy, messageId) {
+ 	for (const node of legacy.nodes) {
+ 		if (node.kind !== "assistant" || node.messageId !== messageId) continue;
+-		return (0, __deepseek_ai_dsh_client_ui_primitives.extractMarkdownPlainText)(prepareTtsText(node.blocks.filter((block) => block.kind === "text").map((block) => block.text).join("\n\n"))).trim();
++		const rawText = node.blocks.filter((block) => block.kind === "text").map((block) => block.text).join("\n\n");
++		const spokenOverride = extractTtsSpokenOverride(rawText);
++		if (spokenOverride !== void 0) return spokenOverride;
++		return (0, __deepseek_ai_dsh_client_ui_primitives.extractMarkdownPlainText)(prepareTtsText(rawText)).trim();
+ 	}
+ 	return "";
  }
 diff --git a/lib/shared-DQIrhcy-.js b/lib/shared-DQIrhcy-.js
 index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..e310cdd490d9345fdc42d24dde8029afdb7a593b 100644
