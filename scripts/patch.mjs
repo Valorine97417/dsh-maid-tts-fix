@@ -337,92 +337,7 @@ function cmdUpgrade() {
       console.log(`· ${patch.packageName}：补丁已是 ${installed}，无需重做。`)
       continue
     }
-
-    console.log(`\n${patch.packageName}：${patch.version} → ${installed}`)
-    if (dry) {
-      console.log(`  将 patch 出 ${installed} 的临时目录，按 ${EDITS.length} 条编辑重放，再 patch-commit。`)
-      continue
-    }
-
-    const status = runPnpm(['patch', `${patch.packageName}@${installed}`])
-    if (status !== 0) {
-      // 最常见的失败：临时目录还在（pnpm patch-commit **不会**自动删它）。
-      // 报错原文是 ERR_PNPM_EDIT_DIR_NOT_EMPTY。那不是故障，是残留——
-      // 清掉重来即可，所以这里自己收拾，不把残局丢给人。
-      const staging = path.join(profile, 'node_modules', '.pnpm_patches', `${patch.packageName}@${installed}`)
-      if (fs.existsSync(staging)) {
-        console.log(`  临时目录有残留，清掉重来：${path.relative(profile, staging)}`)
-        fs.rmSync(staging, { recursive: true, force: true })
-        const retry = runPnpm(['patch', `${patch.packageName}@${installed}`])
-        if (retry !== 0) {
-          console.error(`  pnpm patch 重试仍失败（退出码 ${retry}）`)
-          failedAny = true
-          continue
-        }
-      } else {
-        console.error(`  pnpm patch 退出码 ${status}`)
-        failedAny = true
-        continue
-      }
-    }
-
-    const staging = path.join(profile, 'node_modules', '.pnpm_patches', `${patch.packageName}@${installed}`)
-    const plan = planEdits(staging, file => fs.readFileSync(file, 'utf8'))
-    if (plan.already) {
-      console.log('  这棵树已经含补丁特征，跳过重放（幂等）——直接 patch-commit 收口。')
-    }
-    if (!plan.ok) {
-      console.error('  锚点对不上，补丁没重放。逐条说明：')
-      for (const item of plan.failed) {
-        console.error(`    · ${item.edit.file} / ${item.edit.id}：期望命中 ${item.edit.expect} 次，实际 ${item.found} 次`)
-        console.error(`      ${item.edit.why}`)
-      }
-      console.error('  上游多半改了那块代码——对着源码把 lib/edits.js 里的锚点更新一下，再跑一次。')
-      failedAny = true
-      continue
-    }
-    if (plan.contents !== undefined) {
-      for (const [file, text] of plan.contents) fs.writeFileSync(file, text, 'utf8')
-      console.log(`  重放 ${plan.applied.length} 条编辑：${plan.applied.join('、')}`)
-    }
-
-    // 语法不过就绝不 commit——一个语法错的补丁会把插件整个弄哑。
-    let syntaxOk = true
-    for (const rel of TARGET_FILES) {
-      const check = spawnSync(process.execPath, ['--check', path.join(staging, rel)], { encoding: 'utf8' })
-      if (check.status !== 0) {
-        console.error(`  ✗ 语法检查失败：${rel}\n${check.stderr.trim()}`)
-        syntaxOk = false
-      }
-    }
-    if (!syntaxOk) {
-      failedAny = true
-      continue
-    }
-    console.log('  node --check 通过')
-
-    const commit = runPnpm(['patch-commit', staging])
-    if (commit !== 0) {
-      console.error(`  patch-commit 退出码 ${commit}`)
-      failedAny = true
-      continue
-    }
-
-    // patch-commit 已经生成了新版本的 .patch 并把登记指向它；旧的得清掉，
-    // 否则 pnpm 会因为旧键找不到对应版本而报 ERR_PNPM_UNUSED_PATCH。
-    const newName = `${patch.packageName}@${installed}.patch`
-    const oldInProfile = path.join(profilePatchDir, patch.name)
-    if (fs.existsSync(oldInProfile)) {
-      fs.unlinkSync(oldInProfile)
-      console.log(`  清掉旧补丁 ${path.relative(profile, oldInProfile)}`)
-    }
-    const repoOld = path.join(PATCH_DIR, patch.name)
-    const repoNew = path.join(PATCH_DIR, newName)
-    if (fs.existsSync(repoNew)) fs.unlinkSync(repoNew) // 用 patch-commit 生成的那份
-    if (fs.existsSync(repoOld)) fs.renameSync(repoOld, repoNew)
-    const fromProfile = path.join(profilePatchDir, newName)
-    if (fs.existsSync(fromProfile)) fs.copyFileSync(fromProfile, repoNew)
-    console.log(`  新补丁入库：patches/${newName}`)
+    if (!redoOne(patch, installed, dry)) failedAny = true
   }
 
   if (dry) {
@@ -434,11 +349,178 @@ function cmdUpgrade() {
   return failedAny ? 1 : verify
 }
 
-const COMMANDS = { list: cmdList, install: cmdInstall, verify: cmdVerify, remove: cmdRemove, upgrade: cmdUpgrade }
+/**
+ * 按当前 `lib/edits.js` 重新生成补丁 —— **版本不变**也要重做。
+ *
+ * 和 `upgrade` 的区别：upgrade 是"上游发新版了，把补丁跟上去"，版本必然变；
+ * redo 是"补丁意图改了（往 edits.js 里加了新编辑），把同一个版本的补丁重出
+ * 一份"。两者落盘流程一模一样，只差在要不要检查版本变化。
+ *
+ * 为什么必须走 pnpm patch 重出、而不是手工编辑 `.patch`：`.patch` 是产物，
+ * `edits.js` 是意图。手改产物的话，下次 upgrade 一重放，手工那部分就没了。
+ */
+function cmdRedo() {
+  const patches = listPatches(PATCH_DIR)
+  if (patches.length === 0) {
+    console.error('patches/ 下没有补丁文件，不知道要重做哪个。')
+    return 1
+  }
+  if (!fs.existsSync(workspaceFile)) {
+    console.error(`找不到 ${workspaceFile}，profile 路径对吗？（用 --profile 指定）`)
+    return 1
+  }
+  const dry = has('--dry-run')
+  const target = argValue('--to')
+
+  let failedAny = false
+  for (const patch of patches) {
+    const version = target ?? installedVersion(path.join(profile, 'node_modules', patch.packageName)) ?? patch.version
+    if (!redoOne(patch, version, dry)) failedAny = true
+  }
+
+  if (dry) {
+    console.log('\n（--dry-run，未写盘）')
+    return 0
+  }
+  const verify = cmdVerify()
+  if (failedAny) console.error('\n有步骤失败，见上。')
+  return failedAny ? 1 : verify
+}
+
+/**
+ * 重做单个补丁：patch 出干净树 → 重放 edits → 语法检查 → patch-commit → 入库。
+ *
+ * @returns {boolean} 是否成功。
+ */
+function redoOne(patch, version, dry) {
+  console.log(`\n${patch.packageName}：${patch.version} → ${version}`)
+  const staging = path.join(profile, 'node_modules', '.pnpm_patches', `${patch.packageName}@${version}`)
+
+  if (dry) {
+    console.log(`  将 patch 出 ${version} 的临时目录，按 ${EDITS.length} 条编辑重放，再 patch-commit。`)
+    return true
+  }
+
+  // redo 的语义就是「从干净树重来」，所以先清暂存目录。
+  // 不清的话 pnpm 会沿用上次的残留（里面可能已经打过补丁），重放阶段
+  // 走 already 分支跳过——于是改了 lib/edits.js 却什么也没发生，
+  // 还打印「成功」。2026-10-15 实测踩到：临时目录里躺着上一轮的树。
+  if (fs.existsSync(staging)) {
+    console.log(`  清掉上次的暂存树：${path.relative(profile, staging)}`)
+    fs.rmSync(staging, { recursive: true, force: true })
+  }
+
+  // 关键一步（2026-10-15 实测踩到，卡了整整一轮）：**必须先摘掉登记**。
+  // pnpm patch 对「已在 patchedDependencies 里」的包，解出来的是**打过补丁的
+  // 版本**——它从虚拟 store 里取现成产物，不是从 registry 下原始 tarball。
+  // 于是重放阶段看到树里已有 stripTtsStyleBlocks，走 already 分支跳过，
+  // 改了 edits.js 等于白改。摘掉登记后 pnpm 才会去取干净包。
+  const key = `${patch.packageName}@${version}`
+  const originalWorkspace = fs.readFileSync(workspaceFile, 'utf8')
+  const stripped = removePatchedDependency(originalWorkspace, key)
+  if (stripped.changed) {
+    fs.writeFileSync(workspaceFile, stripped.text, 'utf8')
+    console.log(`  临时摘掉登记 ${key}（不然 pnpm 取的是已打过补丁的树）`)
+  }
+
+  /** 失败时把登记还原——patch-commit 成功后由它自己写回，那时不能还原。 */
+  const restoreRegistration = () => {
+    const now = fs.readFileSync(workspaceFile, 'utf8')
+    if (removePatchedDependency(now, key).changed) return // 已经有登记了，不用还原
+    fs.writeFileSync(workspaceFile, originalWorkspace, 'utf8')
+    console.log('  已还原 patchedDependencies 登记')
+  }
+
+  const status = runPnpm(['patch', `${patch.packageName}@${version}`])
+  if (status !== 0) {
+    restoreRegistration()
+    console.error(`  pnpm patch 退出码 ${status}`)
+    return false
+  }
+
+  const plan = planEdits(staging, file => fs.readFileSync(file, 'utf8'))
+  if (plan.already) {
+    // 摘了登记还拿到带补丁的树 —— 那 store 里的包多半已被污染
+    // （补丁产物被当成原包缓存了）。重放会叠第二遍，必须停下来说清楚。
+    restoreRegistration()
+    console.error('  ✗ 摘掉登记后解出来的树仍含补丁特征——store 里的包可能已被污染。')
+    console.error('    重放会叠第二遍，已中止。修：pnpm store prune 后重跑。')
+    return false
+  }
+  if (!plan.ok) {
+    restoreRegistration()
+    console.error('  锚点对不上，补丁没重放。逐条说明：')
+    for (const item of plan.failed) {
+      console.error(`    · ${item.edit.file} / ${item.edit.id}：期望命中 ${item.edit.expect} 次，实际 ${item.found} 次`)
+      console.error(`      ${item.edit.why}`)
+    }
+    console.error('  上游多半改了那块代码——对着源码把 lib/edits.js 里的锚点更新一下，再跑一次。')
+    return false
+  }
+  if (plan.contents !== undefined) {
+    for (const [file, text] of plan.contents) fs.writeFileSync(file, text, 'utf8')
+    console.log(`  重放 ${plan.applied.length} 条编辑：${plan.applied.join('、')}`)
+  }
+
+  // 语法不过就绝不 commit——一个语法错的补丁会把插件整个弄哑。
+  let syntaxOk = true
+  for (const rel of TARGET_FILES) {
+    const check = spawnSync(process.execPath, ['--check', path.join(staging, rel)], { encoding: 'utf8' })
+    if (check.status !== 0) {
+      console.error(`  ✗ 语法检查失败：${rel}\n${check.stderr.trim()}`)
+      syntaxOk = false
+    }
+  }
+  if (!syntaxOk) {
+    restoreRegistration()
+    return false
+  }
+  console.log('  node --check 通过')
+
+  const commit = runPnpm(['patch-commit', staging])
+  if (commit !== 0) {
+    restoreRegistration()
+    console.error(`  patch-commit 退出码 ${commit}`)
+    return false
+  }
+
+  // patch-commit 已在 profile 的 patches/ 下生成新补丁（同名覆盖），
+  // 这份是**新的**，不能删——2026-10-15 实测踩到：把 repoOld/repoNew 当成
+  // 两个不同文件去 unlink+rename，版本不变时两者同名，先 unlink 就把新补丁
+  // 删了，随后 rename 找不到源文件，结果两边都没了。
+  const newName = `${patch.packageName}@${version}.patch`
+  const fromProfile = path.join(profilePatchDir, newName)
+  if (!fs.existsSync(fromProfile)) {
+    console.error(`  patch-commit 说成功了，但 ${path.relative(profile, fromProfile)} 不存在——停下来人工看一眼。`)
+    return false
+  }
+  if (newName !== patch.name) {
+    // 版本变了：清掉 profile 与仓库里的旧名字，登记已由 patch-commit 指向新键。
+    for (const old of [path.join(profilePatchDir, patch.name), path.join(PATCH_DIR, patch.name)]) {
+      if (fs.existsSync(old)) {
+        fs.unlinkSync(old)
+        console.log(`  清掉旧补丁 ${path.relative(profile, old)}`)
+      }
+    }
+  }
+  fs.copyFileSync(fromProfile, path.join(PATCH_DIR, newName))
+  console.log(`  新补丁入库：patches/${newName}`)
+  return true
+}
+
+const COMMANDS = {
+  list: cmdList,
+  install: cmdInstall,
+  verify: cmdVerify,
+  remove: cmdRemove,
+  upgrade: cmdUpgrade,
+  redo: cmdRedo,
+}
 const command = process.argv[2]
 if (command === undefined || !(command in COMMANDS)) {
-  console.log('用法：node scripts/patch.mjs <list|install|verify|remove|upgrade> [--dry-run] [--profile <dir>]')
+  console.log('用法：node scripts/patch.mjs <list|install|verify|remove|upgrade|redo> [--dry-run] [--profile <dir>]')
   console.log('  upgrade [--to <版本>]   上游升版后重做补丁（默认按 profile 里已装的版本）')
+  console.log('  redo    [--to <版本>]   版本不变，按 lib/edits.js 重新生成补丁（改过补丁意图后跑）')
   process.exit(command === undefined ? 0 : 1)
 }
 process.exit(COMMANDS[command]())

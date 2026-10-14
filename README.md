@@ -18,14 +18,39 @@ VCP 卡片的样式写在 `<style>` 块里，而 CSS 是**多行**的。这个�
 
 不是"不知道念哪一段"，是**念了不该念的**——卡片做得越精致，念出来的垃圾越多。
 
-补丁做两件事，两处文件各改一遍（`lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一个函数的两个副本，漏一个就等于没修）：
+补丁做三件事，两处文件各改一遍（`lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一个函数的两个副本，漏一个就等于没修）：
 
 | 改动 | 做什么 |
 | --- | --- |
 | 加三个常量 + `stripTtsStyleBlocks()` | 先按**块**删 `<style>`/`<script>` 整段，再走原来的行内清洗 |
 | 改 `removeTtsMarkup` 首行 | 把新函数接在链首——函数写在旁边不等于会被调用 |
+| 加 `extractTtsSpokenOverride()` 并接进 `applyTtsPlaybackScope` | 认 `<!--tts:…-->` 标记，只念标记里那一段（见第三节） |
 
 流式中间帧也照顾到了：`<style>` 已开、`</style>` 还没到时，从开标签处截断，宁可少念半句也不念 CSS。
+
+## 一之二、只念重点：`<!--tts:…-->`
+
+上游的「朗读范围」只有两档：全文，或者**按 160 字硬切的第一段**。第二档不是摘要，是截断——它不知道重点在哪。
+
+只有写回复的人知道重点在哪。所以约定一个标记：
+
+```markdown
+老大，补丁已升级，朗读现在只念这一句。
+
+<!--tts:老大，补丁已升级，朗读现在只念这一句。-->
+
+后面是长篇正文，卡片、表格、细节……
+```
+
+点了朗读，耳朵里只有标记里那句话。**没写标记就完全退回原逻辑**——这个补丁不改变任何既有行为，只是多给一条路。
+
+挂在 `applyTtsPlaybackScope` 上是有原因的：手动点朗读按钮走的就是它，而它拿到的是**未经清洗的原始消息文本**——此时标记还在，还没被 `removeTtsMarkup` 剥掉。挂在清洗之后的任何一步都拿不到标记。
+
+三条细节：
+
+- 标记内容会**压掉换行与连续空白**再念（`\s+` → 单空格），所以可以为了好读写成多行
+- 空白标记（`<!--tts:   -->`）视为没写，退回原逻辑
+- 有标记时**不加** smart 模式的收尾语（"后面还有内容…"）——摘要本就是完整的一段，后面没有"还有内容"
 
 ## 二、为什么走 pnpm patch，而不是改 node_modules
 
@@ -48,6 +73,7 @@ node scripts/patch.mjs install    # 复制补丁 + 登记 + pnpm install + 核�
 node scripts/patch.mjs verify     # 只核对：登记 / hash / 落盘
 node scripts/patch.mjs remove     # 撤销登记与补丁文件，再 pnpm install
 node scripts/patch.mjs upgrade    # 上游升版后重做补丁（见下节）
+node scripts/patch.mjs redo       # 版本不变，按 lib/edits.js 重出补丁（改了补丁意图后跑）
 node scripts/patch.mjs install --dry-run      # 只说要做什么
 node scripts/patch.mjs verify --profile <dir> # 换 profile（默认 desktop）
 node scripts/patch.mjs upgrade --to 3.1.0     # 指定目标版本，默认按已装的
@@ -57,7 +83,7 @@ node scripts/patch.mjs upgrade --to 3.1.0     # 指定目标版本，默认按�
 
 ```
 ✓ 登记：pnpm-workspace.yaml 的 patchedDependencies → dsh-xiaomi-tts@3.0.8
-✓ lockfile hash 与补丁正本一致：1933918e04f838e8…
+✓ lockfile hash 与补丁正本一致：705725fe5d191f3a…
 ✓ 落盘：lib/client.js 已应用
 ✓ 落盘：lib/shared-DQIrhcy-.js 已应用
 ```
@@ -96,6 +122,30 @@ verify                         → 四项核对
 锚点所在的那几行时，重放会明确报出是哪一条、期望命中几次、实际几次，而不是
 甩一个上下文对不上的 diff 让人自己啃——照着源码把锚点更新一下再跑即可。
 
+### 改了补丁意图、但版本没变：`redo`
+
+往 `lib/edits.js` 里加了新编辑（比如加那条 `spoken-override`），上游版本却没动，
+这时跑 `upgrade` 会被"补丁已是 3.0.8，无需重做"挡回来。用 `redo`——流程一模一样，
+只差在**不检查版本变化**。
+
+**这里有个坑，卡了整整一轮（2026-10-15 实测）**：`pnpm patch` 对已经登记在
+`patchedDependencies` 里的包，解出来的是**打过补丁的版本**——它从虚拟 store 里
+取现成产物，不是从 registry 下原始 tarball。于是重放阶段看到树里已经有
+`stripTtsStyleBlocks`，走幂等分支跳过，**改了 `edits.js` 等于白改，还打印成功**。
+
+所以 `redo` 的流程是：
+
+```
+临时摘掉 patchedDependencies 登记   → 不然 pnpm 取的是已打过补丁的树
+清掉上次残留的暂存目录              → 不然沿用上一轮的树，同样走幂等跳过
+pnpm patch <包>@<版本>              → 这回才是干净的上游原样
+按 lib/edits.js 重放 → node --check → patch-commit
+```
+
+摘掉登记是**临时**的：失败时脚本自己还原，成功时 `patch-commit` 会写回。
+若摘掉登记后解出来的树**仍含**补丁特征，脚本会中止并提示 `pnpm store prune`——
+那说明 store 里的包已经被污染（补丁产物被当成原包缓存了），重放会叠第二遍。
+
 ### 锚点为什么这么难写（三次实测教训）
 
 同一个坑踩了三回，都记在 `lib/edits.js` 的注释里：
@@ -118,7 +168,8 @@ verify                         → 四项核对
 3. 逐字节比对重放结果与 patch-commit 出来的版本
 
 结果是**完全一致**。端到端演练（把补丁文件名伪装成旧版本、逼 `upgrade` 走完整
-流程）生成的补丁，sha256 与原正本逐字节相同：`1933918e…81ac2`。
+流程）生成的补丁，sha256 与原正本逐字节相同。加上 `spoken-override` 那条编辑之后
+补丁变了（4120 → 6144 字节），重放仍逐字节可复现——`redo` 本身就是一次实测。
 
 ## 五、启动自检：它不会悄悄死掉
 

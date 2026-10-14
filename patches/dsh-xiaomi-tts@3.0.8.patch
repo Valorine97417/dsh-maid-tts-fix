@@ -1,5 +1,5 @@
 diff --git a/lib/client.js b/lib/client.js
-index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..83cc75096e20190e403ddd39fe75eb694fdb936c 100644
+index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..535a3b7515d1796b12a66639f37d44b34a7b4c8a 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -303,11 +303,21 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
@@ -25,8 +25,25 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..83cc75096e20190e403ddd39fe75eb69
  	text = text.replace(TTS_URL_PATTERN, " ");
  	return removeTtsPaths(text);
  }
+@@ -471,7 +481,16 @@ function appendTtsSmartTruncationOutro(fullText, spokenText, random = Math.rando
+ 	return `${trimmed}${TTS_OUTRO_PAUSE_END.test(trimmed) ? "" : "。"}${TTS_SMART_TRUNCATION_OUTROS[index]}`;
+ }
+ /** Apply the configured playback range and Smart automatic closing cue to a completed reply. */
++/** 回复里写了 <!--tts:…--> 就念它，没写返回 undefined 走原逻辑。 */
++function extractTtsSpokenOverride(value) {
++	const match = /<!--\s*tts:([\s\S]*?)-->/.exec(value);
++	if (match === null) return void 0;
++	const spoken = match[1].replace(/\s+/g, " ").trim();
++	return spoken.length === 0 ? void 0 : spoken;
++}
+ function applyTtsPlaybackScope(value, scope, automatic, random = Math.random) {
++	const override = extractTtsSpokenOverride(value);
++	if (override !== void 0) return override;
+ 	const scoped = applyTtsReadScope(value, resolveTtsReadScope(scope, automatic));
+ 	return scope === "smart" && automatic ? appendTtsSmartTruncationOutro(value, scoped, random) : scoped;
+ }
 diff --git a/lib/shared-DQIrhcy-.js b/lib/shared-DQIrhcy-.js
-index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..1139698302d7b9136e641064c14519cf8bb84ec8 100644
+index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..e310cdd490d9345fdc42d24dde8029afdb7a593b 100644
 --- a/lib/shared-DQIrhcy-.js
 +++ b/lib/shared-DQIrhcy-.js
 @@ -323,11 +323,21 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
@@ -51,4 +68,21 @@ index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..1139698302d7b9136e641064c14519cf
 +	let text = stripTtsStyleBlocks(value).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
  	text = text.replace(TTS_URL_PATTERN, " ");
  	return removeTtsPaths(text);
+ }
+@@ -491,7 +501,16 @@ function appendTtsSmartTruncationOutro(fullText, spokenText, random = Math.rando
+ 	return `${trimmed}${TTS_OUTRO_PAUSE_END.test(trimmed) ? "" : "。"}${TTS_SMART_TRUNCATION_OUTROS[index]}`;
+ }
+ /** Apply the configured playback range and Smart automatic closing cue to a completed reply. */
++/** 回复里写了 <!--tts:…--> 就念它，没写返回 undefined 走原逻辑。 */
++function extractTtsSpokenOverride(value) {
++	const match = /<!--\s*tts:([\s\S]*?)-->/.exec(value);
++	if (match === null) return void 0;
++	const spoken = match[1].replace(/\s+/g, " ").trim();
++	return spoken.length === 0 ? void 0 : spoken;
++}
+ function applyTtsPlaybackScope(value, scope, automatic, random = Math.random) {
++	const override = extractTtsSpokenOverride(value);
++	if (override !== void 0) return override;
+ 	const scoped = applyTtsReadScope(value, resolveTtsReadScope(scope, automatic));
+ 	return scope === "smart" && automatic ? appendTtsSmartTruncationOutro(value, scoped, random) : scoped;
  }
