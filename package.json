@@ -1,7 +1,7 @@
 {
   "name": "dsh-maid-tts-fix",
   "description": "DSH 小困插件 · 朗读文本清洗补丁：给 dsh-xiaomi-tts 装上能跨行的 style/script 剥离，让 VCP 卡片的 CSS 不再被念出来；顺带在每次启动体检补丁是否还活着（登记 / hash / 落盘三项）。",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "main": "index.js",
   "license": "MIT",

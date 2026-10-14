@@ -47,8 +47,10 @@ node scripts/patch.mjs list       # 本仓带哪些补丁、目标版本、sha25
 node scripts/patch.mjs install    # 复制补丁 + 登记 + pnpm install + 核对
 node scripts/patch.mjs verify     # 只核对：登记 / hash / 落盘
 node scripts/patch.mjs remove     # 撤销登记与补丁文件，再 pnpm install
+node scripts/patch.mjs upgrade    # 上游升版后重做补丁（见下节）
 node scripts/patch.mjs install --dry-run      # 只说要做什么
 node scripts/patch.mjs verify --profile <dir> # 换 profile（默认 desktop）
+node scripts/patch.mjs upgrade --to 3.1.0     # 指定目标版本，默认按已装的
 ```
 
 `verify` 输出长这样：
@@ -71,7 +73,54 @@ node scripts/patch.mjs verify --profile <dir> # 换 profile（默认 desktop）
 `dependencies`，只补回目录。`install` 子命令已内置这个回退——它先跑 `pnpm install`，
 发现是 `missing-file`（目录整个没了）就自动补一发 `pnpm add`，不用人记。
 
-## 四、启动自检：它不会悄悄死掉
+## 四、上游升版了怎么办：`upgrade`
+
+这是本仓存在的一半理由。**补丁不影响上游更新，但前提是升完得重做补丁。**
+
+`patchedDependencies` 的键是**精确版本**（`dsh-xiaomi-tts@3.0.8`）。上游一发新版，
+这个键就悬空——实测（2026-10-15）pnpm 会直接报 `ERR_PNPM_UNUSED_PATCH` 并
+**中止整个 install**。这其实是好事（不会假装成功），但意味着不重做补丁就升不动。
+
+`upgrade` 就是那条路，全程不需要人碰源码：
+
+```
+pnpm patch <包>@<新版本>       → 解出一棵"上游原样"的源码树
+按 lib/edits.js 重放编辑       → 锚点命中数不对就整体中止，绝不半打
+node --check 两处文件          → 语法错就绝不 commit
+pnpm patch-commit              → 生成新版本的 .patch 并登记
+清掉旧版本的 .patch 与登记     → 否则旧键又会触发 UNUSED_PATCH
+verify                         → 四项核对
+```
+
+**补丁的"意图"写在 `lib/edits.js`，`.patch` 文件是它的产物。** 上游改动了
+锚点所在的那几行时，重放会明确报出是哪一条、期望命中几次、实际几次，而不是
+甩一个上下文对不上的 diff 让人自己啃——照着源码把锚点更新一下再跑即可。
+
+### 锚点为什么这么难写（三次实测教训）
+
+同一个坑踩了三回，都记在 `lib/edits.js` 的注释里：
+
+| 次 | 症状 | 原因 |
+| --- | --- | --- |
+| 1 | 命中 0 次 | 锚点写成带 `\t` 前缀，源码那行是顶格的 |
+| 2 | 替换后缩进叠成两层 | 替换串自带 `\t`，源码行已有缩进 |
+| 3 | 逐字全不匹配，但肉眼看"明明一样" | **上游那两个文件是 CRLF 行尾**，锚点写的是 `\n` |
+
+第三条最阴。现在的写法是：锚点一律用 `\n` 书写，由 `normalizeEol()` 在匹配前
+按目标文件的行尾风格折算——不手写 `\r`，也不假设上游用什么行尾。
+
+### 这套重放可信吗
+
+可信，而且是被证明的。`_probe/tts-fix-replay-test.mjs` 拿**真实上游源码**做验证：
+
+1. 把已打补丁的那份拷出来，`git apply -R` 反向撤成"上游原样"
+2. 让 `planEdits` 从零重放一遍
+3. 逐字节比对重放结果与 patch-commit 出来的版本
+
+结果是**完全一致**。端到端演练（把补丁文件名伪装成旧版本、逼 `upgrade` 走完整
+流程）生成的补丁，sha256 与原正本逐字节相同：`1933918e…81ac2`。
+
+## 五、启动自检：它不会悄悄死掉
 
 `index.js` 在每次启动时把同样三项问一遍，掉哪一项就 `warn` 出来并附上修它的命令。三条路径互相独立，因为它们是三个独立的失效点：
 
@@ -83,14 +132,22 @@ node scripts/patch.mjs verify --profile <dir> # 换 profile（默认 desktop）
 
 它**不修、不拦、不抛**——一个体检器没有资格让应用起不来。宿主没装 `dsh-xiaomi-tts` 时，它也不过是白问一遍。
 
-## 五、边界
+## 六、边界
 
 - **只做朗读文本清洗这一件事。** 不碰音色、不碰配置、不碰插件其余部分。
 - **不改上游一个字节以外的任何东西。** 补丁全部内容都在 `patches/*.patch` 里，`install`/`remove` 之外不写 profile。
 - **补丁随包分发。** `patches/` 在 `package.json` 的 `files` 白名单里——这个包的意义就是携带补丁正本，丢了它就没意义。
 - 上游哪天自己修好了，`verify` 会报「落盘：未应用」而不是假装成功——那正是该退休的信号。
 
-## 六、和 dsh-maid-preset 的关系
+### 上游停更了怎么办
+
+本仓的定位是**两段式**：上游活着时只做补丁、跟随更新、不锁版本；上游一旦停更，
+就整体收录接管（形态参照 `dsh-maid-preset` 内置 `meow-memory` 的做法）。
+
+判断信号：`verify` 报「落盘：未应用」且上游仓库长期无提交 —— 说明上游自己修好了，
+或者不再维护。前者退休，后者转收录。
+
+## 七、和 dsh-maid-preset 的关系
 
 **没有关系，也不需要有关系。** 人设插件管人设与记忆，这个插件管第三方插件的朗读文本——环境施工件不进人设仓库，两边各自独立。人设那边只留了一份音色提示词与说明（`voice-refs/prompt.md`），不引用本包。
 
