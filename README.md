@@ -27,6 +27,7 @@ VCP 卡片的样式写在 `<style>` 块里，而 CSS 是**多行**的。这个�
 | 加 `extractTtsSpokenOverride()` | 认 `<!--tts:…-->` 标记，把里面的文本抽出来 |
 | 接进 `messageText` 的**清洗之前** | 真正的入口。清洗会把标记当 HTML 标签吃掉（见第一节之二） |
 | 接进 `applyTtsPlaybackScope` | 双保险：自动播报那条链路不经过 `messageText` |
+| 新增 `playbackOwnerId`（播放归属） | 把「UI 在看哪个会话」和「播放属于谁」拆开——切会话不再掐断朗读（见第一节之三） |
 
 流式中间帧也照顾到了：`<style>` 已开、`</style>` 还没到时，从开标签处截断，宁可少念半句也不念 CSS。
 
@@ -81,6 +82,31 @@ v6.40 为什么没用：`<!--tts:…-->` 前后有空行时，会被切成**独�
 **铁律：钩子挂点必须在调用链入口，不是下游。** 这条在 TTS 侧（第一版挂在 `applyTtsPlaybackScope`）和渲染侧（v6.40 挂在 `parseFrag`）各栽了一次。
 
 **两个补丁必须配套**：只打 TTS 侧 → 注释不念但显形；只打渲染侧 → 注释不显形但照旧念全文。
+
+## 一之三、切会话不打断：`playbackOwnerId`
+
+上游的 `PlaybackController` 把两件事挤在 `activeSessionId` 一个字段里：**UI 正在看哪个会话**，和**这段播放属于谁**。后果是切会话即停——`activateSession` / `deactivateSession` 一进来就 `stopCurrent()`，播放循环里十几处 `this.activeSessionId !== sessionId` 判据也会在切走后自己 `return`。想在隔壁会话里干活，这条朗读就得断。
+
+拆开：新增 **`playbackOwnerId`** 字段＝播放归属。
+
+| 路径 | 以前看 | 现在看 |
+| --- | --- | --- |
+| 播放循环判据（`segmented` / `toggle` 体内十几处） | `activeSessionId` | **`playbackOwnerId`** |
+| 播放入口（接管所有权） | 只设 `activeSessionId` | 同时设 `playbackOwnerId = sessionId`（新朗读仍会打断旧的——单声道，这是对的） |
+| `activateSession` / `deactivateSession` | 直接 `stopCurrent()` | **正在响就只换 UI 会话，不停播**（`isPlayingNow()` 判据：current / 队列 / 分段状态 / 合成请求任一活着） |
+| `cancelPlayback` | 谁都能停 | **归属会话才能停**（别会话在播就不越权） |
+| UI 记账（`observeSession` / `claimAutomaticPlayback` / `updateLivePlayback`） | `activeSessionId` | 照旧，不动 |
+
+行为结果：
+
+- 播放中切走 → **继续播**；切回来 → 按钮 还是「播放中 / 暂停」态（view 不被清空）
+- 点那条消息的朗读按钮暂停 → 暂停；切走再切回 → 还是暂停态，可续播
+- 归属会话自己点停 / 开始新一轮朗读 → 停
+- `cancelPlayback`（新回复开始时上游会调）→ 只停归属会话的，不越权
+
+行为探针：`_probe/tts-switch-probe.mjs`——用 `cutFunction` 从落盘的 client.js 抠出**真实的** `PlaybackController` 类，在 `node:vm` 沙箱里喂桩，7 组场景 20 用例全过（播放中切走不停 / 空闲切走正常清 / 不越权 cancel / 归属 cancel 停 / 手动暂停后切回来还是暂停态 / 循环判据不再看 activeSessionId / 空闲切回正常重置）。探针第一版把 `releaseCurrentAudio` 桩掉了，结果 `stopCurrent` 清空链断了、误报一堆——**桩要贴着真实生命周期给，别图省事**。
+
+一句边界：**隔壁会话完成任务自动播报不在此列**。上游的自动播报触发器只挂在当前渲染着的消息组件里，隔壁会话的组件切走就卸载了——要那个得另起一套全局监听，改动量和风险都不是一个量级，没顺手做。
 
 ## 二、为什么走 pnpm patch，而不是改 node_modules
 
