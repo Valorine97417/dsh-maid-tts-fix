@@ -1,0 +1,43 @@
+{
+  "name": "dsh-maid-tts-fix",
+  "description": "DSH 小困插件 · 朗读文本清洗补丁：给 dsh-xiaomi-tts 装上能跨行的 style/script 剥离，让 VCP 卡片的 CSS 不再被念出来；顺带在每次启动体检补丁是否还活着（登记 / hash / 落盘三项）。",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "tts",
+    "xiaomi",
+    "mimo",
+    "pnpm-patch",
+    "vcp",
+    "style-block",
+    "read-aloud"
+  ],
+  "files": [
+    "index.js",
+    "lib",
+    "scripts",
+    "patches",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./lib/selfcheck.js": "./lib/selfcheck.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

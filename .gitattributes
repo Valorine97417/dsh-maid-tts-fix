@@ -1,0 +1,6 @@
+# 补丁文件必须**逐字节**保持原样：它的 sha256 就是 lockfile 里的 patch_hash。
+# 任何换行转换都会让 verify 报「hash 不符」——那不是补丁坏了，是 git 动了字节。
+*.patch -text
+
+# 其余文本文件统一 LF，免得在不同机器上 diff 出一堆假改动。
+* text=auto eol=lf

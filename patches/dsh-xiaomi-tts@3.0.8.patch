@@ -1,0 +1,54 @@
+diff --git a/lib/client.js b/lib/client.js
+index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..83cc75096e20190e403ddd39fe75eb694fdb936c 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -303,11 +303,21 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
+ const MARKDOWN_BLOCKQUOTE_RE = /(^|\n)\s*>\s?/g;
+ const MARKDOWN_INLINE_FORMAT_RE = /`+|[*_~]{1,3}/g;
+ const MARKDOWN_TABLE_SEP_RE = /[|]/g;
++const MARKDOWN_STYLE_BLOCK_RE = /<(style|script)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
++const MARKDOWN_STYLE_OPEN_RE = /<(style|script)\b[^>]*>/i;
++const MARKDOWN_STYLE_CLOSE_RE = /<\/(?:style|script)\s*>/i;
++function stripTtsStyleBlocks(value) {
++	const withoutBlocks = value.replace(MARKDOWN_STYLE_BLOCK_RE, " ");
++	const open = withoutBlocks.search(MARKDOWN_STYLE_OPEN_RE);
++	if (open < 0) return withoutBlocks;
++	const rest = withoutBlocks.slice(open);
++	return MARKDOWN_STYLE_CLOSE_RE.test(rest) ? withoutBlocks : withoutBlocks.slice(0, open);
++}
+ function removeTtsPaths(value) {
+ 	return value.replace(TTS_WINDOWS_PATH_PATTERN, " ").replace(TTS_RELATIVE_PATH_PATTERN, " ").replace(TTS_PROJECT_PATH_PATTERN, " ").replace(TTS_UNIX_PATH_PATTERN, " ");
+ }
+ function removeTtsMarkup(value) {
+-	let text = value.replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
++	let text = stripTtsStyleBlocks(value).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
+ 	text = text.replace(TTS_URL_PATTERN, " ");
+ 	return removeTtsPaths(text);
+ }
+diff --git a/lib/shared-DQIrhcy-.js b/lib/shared-DQIrhcy-.js
+index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..1139698302d7b9136e641064c14519cf8bb84ec8 100644
+--- a/lib/shared-DQIrhcy-.js
++++ b/lib/shared-DQIrhcy-.js
+@@ -323,11 +323,21 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
+ const MARKDOWN_BLOCKQUOTE_RE = /(^|\n)\s*>\s?/g;
+ const MARKDOWN_INLINE_FORMAT_RE = /`+|[*_~]{1,3}/g;
+ const MARKDOWN_TABLE_SEP_RE = /[|]/g;
++const MARKDOWN_STYLE_BLOCK_RE = /<(style|script)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
++const MARKDOWN_STYLE_OPEN_RE = /<(style|script)\b[^>]*>/i;
++const MARKDOWN_STYLE_CLOSE_RE = /<\/(?:style|script)\s*>/i;
++function stripTtsStyleBlocks(value) {
++	const withoutBlocks = value.replace(MARKDOWN_STYLE_BLOCK_RE, " ");
++	const open = withoutBlocks.search(MARKDOWN_STYLE_OPEN_RE);
++	if (open < 0) return withoutBlocks;
++	const rest = withoutBlocks.slice(open);
++	return MARKDOWN_STYLE_CLOSE_RE.test(rest) ? withoutBlocks : withoutBlocks.slice(0, open);
++}
+ function removeTtsPaths(value) {
+ 	return value.replace(TTS_WINDOWS_PATH_PATTERN, " ").replace(TTS_RELATIVE_PATH_PATTERN, " ").replace(TTS_PROJECT_PATH_PATTERN, " ").replace(TTS_UNIX_PATH_PATTERN, " ");
+ }
+ function removeTtsMarkup(value) {
+-	let text = value.replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
++	let text = stripTtsStyleBlocks(value).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
+ 	text = text.replace(TTS_URL_PATTERN, " ");
+ 	return removeTtsPaths(text);
+ }

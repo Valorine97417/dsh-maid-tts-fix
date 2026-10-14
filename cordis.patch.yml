@@ -1,0 +1,6 @@
+# dsh-maid-tts-fix bundle patch
+# 只插本插件自身一行——它是纯启动自检，没有客户端半边、不注册路由、
+# 不需要任何服务（inject 空数组），所以这里没有 config。
+- insert:
+    - id: tts-fix
+      name: 'dsh-maid-tts-fix'

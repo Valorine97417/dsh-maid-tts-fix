@@ -1,0 +1,88 @@
+# dsh-maid-tts-fix
+
+DSH 小困插件 · **朗读文本清洗补丁器**：给 [dsh-xiaomi-tts](https://github.com/ppy-web/dsh-plugin-xiaomi-mimo-tts) 装上能跨行的 `style`/`script` 剥离，让 VCP 卡片的 CSS 不再被念出来；并**盯着这个补丁别掉**。
+
+## 一、病根：漂亮的卡片，念出来是 CSS
+
+插件剥 HTML 用的是单行正则：
+
+```js
+const MARKDOWN_HTML_TAG_RE = /<[^>\r\n]*>/g;   // [^>\r\n] —— 跨不过换行
+```
+
+VCP 卡片的样式写在 `<style>` 块里，而 CSS 是**多行**的。这个正则匹配不到换行，于是 `<style>` 与 `</style>` 之间的整段原样留下，被当作正文送进语音合成。点一次朗读，耳朵里是：
+
+```
+#vcp-rootbox-sizing:border-box;max-width:760px;padding:26px 28px;...
+```
+
+不是"不知道念哪一段"，是**念了不该念的**——卡片做得越精致，念出来的垃圾越多。
+
+补丁做两件事（两处文件各一遍，因为 `lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一函数的两个副本）：
+
+| 补丁 | 做什么 |
+| --- | --- |
+| `style-helpers` | 加三个常量 + `stripTtsStyleBlocks()`：先按**块**删 `<style>`/`<script>` 整段，再走原来的行内清洗 |
+| `style-wire` | 把 `removeTtsMarkup` 的入口接在链首——函数写在旁边不等于会被调用 |
+
+流式中间帧也照顾到了：`<style>` 已开、`</style>` 还没到时，从开标签处截断，宁可少念半句也不念 CSS。
+
+## 二、为什么走 pnpm patch，而不是改 node_modules
+
+这是**教训**，不是偏好。
+
+2026-10-14 第一版补丁是手改进 `node_modules/dsh-xiaomi-tts/lib/` 的。当晚装另一个插件触发了 pnpm 重铺，补丁连同当时的 `*.bak-*` 备份一起被**静默抹掉**——没有报错、没有提示，直到用户点朗读、耳朵里又响起 CSS 才发现。
+
+改 node_modules 等于没改。所以现在：
+
+- 补丁正本在本仓 `patches/dsh-xiaomi-tts@3.0.8.patch`
+- 登记进 profile 的 `pnpm-workspace.yaml` → `patchedDependencies`
+- hash 落进 `pnpm-lock.yaml` → `patch_hash`（**就是 `.patch` 文件的 sha256**）
+- 此后任何 install / 重铺都会自动重打
+
+## 三、用法
+
+```bash
+node scripts/patch.mjs list       # 本仓带哪些补丁、目标版本、sha256
+node scripts/patch.mjs install    # 复制补丁 + 登记 + pnpm install + 核对
+node scripts/patch.mjs verify     # 只核对：登记 / hash / 落盘
+node scripts/patch.mjs remove     # 撤销登记与补丁文件，再 pnpm install
+node scripts/patch.mjs install --dry-run      # 只说要做什么
+node scripts/patch.mjs verify --profile <dir> # 换 profile（默认 desktop）
+```
+
+`verify` 输出长这样：
+
+```
+✓ 登记：pnpm-workspace.yaml 的 patchedDependencies → dsh-xiaomi-tts@3.0.8
+✓ lockfile hash 与补丁正本一致：1933918e04f838e8…
+✓ 落盘：lib/client.js 已应用
+✓ 落盘：lib/shared-DQIrhcy-.js 已应用
+```
+
+## 四、启动自检：它不会悄悄死掉
+
+`index.js` 在每次启动时把同样三项问一遍，掉哪一项就 `warn` 出来并附上修它的命令。三条路径互相独立，因为它们是三个独立的失效点：
+
+| 问什么 | 掉了会怎样 |
+| --- | --- |
+| 登记还在吗 | profile 换过 / 被谁清过 → 补丁根本不参与 install |
+| hash 对得上吗 | 补丁改过但没重打 → 生效的是旧版本 |
+| 字节落盘了吗 | install 失败 / 包被换版本 → 补丁文件在，包里没有 |
+
+它**不修、不拦、不抛**——一个体检器没有资格让应用起不来。宿主没装 `dsh-xiaomi-tts` 时，它也不过是白问一遍。
+
+## 五、边界
+
+- **只做朗读文本清洗这一件事。** 不碰音色、不碰配置、不碰插件其余部分。
+- **不改上游一个字节以外的任何东西。** 补丁全部内容都在 `patches/*.patch` 里，`install`/`remove` 之外不写 profile。
+- **补丁随包分发。** `patches/` 在 `package.json` 的 `files` 白名单里——这个包的意义就是携带补丁正本，丢了它就没意义。
+- 上游哪天自己修好了，`verify` 会报「落盘：未应用」而不是假装成功——那正是该退休的信号。
+
+## 六、和 dsh-maid-preset 的关系
+
+**没有关系，也不需要有关系。** 人设插件管人设与记忆，这个插件管第三方插件的朗读文本——环境施工件不进人设仓库，两边各自独立。人设那边只留了一份音色提示词与说明（`voice-refs/prompt.md`），不引用本包。
+
+## License
+
+MIT
