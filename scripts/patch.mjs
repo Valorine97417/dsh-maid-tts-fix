@@ -204,6 +204,29 @@ function cmdInstall() {
     console.error(`\npnpm install 退出码 ${status}，补丁可能没打上。核对：node scripts/patch.mjs verify`)
     return status
   }
+
+  const first = inspectProfile(profile, PATCH_DIR)
+  if (first.ok) return cmdVerify()
+
+  // `pnpm install` 有一处盲区（2026-10-15 实测）：如果有人把整包目录从外部删掉
+  // （rm -rf node_modules/<pkg>），pnpm 的账本仍认为"已装好"，于是回一句
+  // 「Already up to date」直接跳过——连 --force、删 .modules.yaml 都不管用。
+  // 补丁文件、登记、lockfile 全对，包里却一个字都没有，verify 报 missing-file。
+  // 唯一的出路是让 pnpm 重新解析这个包：`pnpm add <name>@<version>`。
+  // 同版本重装不会改 dependencies，只会补回目录。
+  const broken = first.rows.filter(row => row.applied.some(item => item.state === 'missing-file'))
+  if (broken.length === 0) return cmdVerify()
+
+  console.log('\npnpm install 跳过了缺失的包（账本以为已装好），改用 pnpm add 重新解析：')
+  for (const row of broken) {
+    const spec = `${row.patch.packageName}@${row.patch.version}`
+    console.log(`  · ${spec}`)
+    const code = runPnpm(['add', spec])
+    if (code !== 0) {
+      console.error(`\npnpm add ${spec} 退出码 ${code}，得手动看看了。`)
+      return code
+    }
+  }
   return cmdVerify()
 }
 

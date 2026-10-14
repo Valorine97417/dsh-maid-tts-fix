@@ -18,12 +18,12 @@ VCP 卡片的样式写在 `<style>` 块里，而 CSS 是**多行**的。这个�
 
 不是"不知道念哪一段"，是**念了不该念的**——卡片做得越精致，念出来的垃圾越多。
 
-补丁做两件事（两处文件各一遍，因为 `lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一函数的两个副本）：
+补丁做两件事，两处文件各改一遍（`lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一个函数的两个副本，漏一个就等于没修）：
 
-| 补丁 | 做什么 |
+| 改动 | 做什么 |
 | --- | --- |
-| `style-helpers` | 加三个常量 + `stripTtsStyleBlocks()`：先按**块**删 `<style>`/`<script>` 整段，再走原来的行内清洗 |
-| `style-wire` | 把 `removeTtsMarkup` 的入口接在链首——函数写在旁边不等于会被调用 |
+| 加三个常量 + `stripTtsStyleBlocks()` | 先按**块**删 `<style>`/`<script>` 整段，再走原来的行内清洗 |
+| 改 `removeTtsMarkup` 首行 | 把新函数接在链首——函数写在旁边不等于会被调用 |
 
 流式中间帧也照顾到了：`<style>` 已开、`</style>` 还没到时，从开标签处截断，宁可少念半句也不念 CSS。
 
@@ -59,6 +59,17 @@ node scripts/patch.mjs verify --profile <dir> # 换 profile（默认 desktop）
 ✓ 落盘：lib/client.js 已应用
 ✓ 落盘：lib/shared-DQIrhcy-.js 已应用
 ```
+
+### 一个 pnpm 的盲区（install 会假装成功）
+
+2026-10-15 实测：如果有人从外部删掉整包目录（`rm -rf node_modules/dsh-xiaomi-tts`），
+`pnpm install` 会回一句 `Already up to date` 直接跳过——**连 `--force`、删掉
+`node_modules/.modules.yaml` 都不管用**。pnpm 的账本仍认为它装好了，于是补丁文件、
+登记、lockfile 全对，包里却一个字都没有，朗读又开始念 CSS。
+
+唯一的出路是让 pnpm 重新解析这个包：`pnpm add <包名>@<版本>`。同版本重装不改
+`dependencies`，只补回目录。`install` 子命令已内置这个回退——它先跑 `pnpm install`，
+发现是 `missing-file`（目录整个没了）就自动补一发 `pnpm add`，不用人记。
 
 ## 四、启动自检：它不会悄悄死掉
 
