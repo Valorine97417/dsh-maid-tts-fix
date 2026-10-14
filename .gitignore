@@ -2,3 +2,7 @@ node_modules/
 *.log
 .DS_Store
 .smoke-*/
+# 本机 profile 的备份（pnpm-workspace.yaml / pnpm-lock.yaml 快照）。
+# 那是**这台机器**的环境状态，不是本仓的内容——clone 到别的机器毫无意义，
+# 还会把别人的依赖清单带进来。备份本身照做，只是不进版本控制。
+.patch-backups/
