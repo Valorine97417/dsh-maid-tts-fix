@@ -1,6 +1,6 @@
 # dsh-maid-tts-fix
 
-DSH 小困插件 · **朗读与音色维护层**：给 [dsh-xiaomi-tts](https://github.com/ppy-web/dsh-plugin-xiaomi-mimo-tts) 装上能跨行的 `style`/`script` 剥离，让 VCP 卡片的 CSS 不再被念出来；切会话不掐断朗读；**隔壁会话跑完也自动念一遍**；并**盯着这个补丁别掉**。音色提示词的定稿与参照样本说明也收在这里。
+DSH 小困插件 · **朗读与音色维护层**：给 [dsh-xiaomi-tts](https://github.com/ppy-web/dsh-plugin-xiaomi-mimo-tts) 装上能跨行的 `style`/`script` 剥离，让 VCP 卡片的 CSS 不再被念出来；切会话不掐断朗读；**隔壁会话跑完也自动念一遍**；**记忆反思轮不念、改念上一条**；并**盯着这个补丁别掉**。音色提示词的定稿与参照样本说明也收在这里。
 
 ## 一、病根：漂亮的卡片，念出来是 CSS
 
@@ -18,7 +18,7 @@ VCP 卡片的样式写在 `<style>` 块里，而 CSS 是**多行**的。这个�
 
 不是"不知道念哪一段"，是**念了不该念的**——卡片做得越精致，念出来的垃圾越多。
 
-补丁做三件事：**别念出 CSS**（改两处文件各一遍）、**只念重点**（见第一节之二）、**切会话不打断且隔壁跑完也念**（见第一节之三、之一之四）。`lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一个函数的两个副本，漏一个就等于没修（跨会话那几段只在 `client.js`——`PlaybackController` 只存在于客户端那份）。
+补丁做四件事：**别念出 CSS**（改两处文件各一遍）、**只念重点**（见第一节之二）、**切会话不打断且隔壁跑完也念**（见第一节之三、之一之四）、**记忆反思轮不念、改念上一条**（见第一节之五）。`lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一个函数的两个副本，漏一个就等于没修（跨会话与反思跳过那几段只在 `client.js`——`PlaybackController` 与 `latestAssistantMessageId` 只存在于客户端那份）。
 
 | 改动 | 做什么 |
 | --- | --- |
@@ -29,6 +29,7 @@ VCP 卡片的样式写在 `<style>` 块里，而 CSS 是**多行**的。这个�
 | 接进 `applyTtsPlaybackScope` | 双保险：自动播报那条链路不经过 `messageText` |
 | 新增 `playbackOwnerId`（播放归属） | 把「UI 在看哪个会话」和「播放属于谁」拆开——切会话不再掐断朗读（见第一节之三） |
 | 新增 `remoteSessionId` + `playRemote()` | 给**不是当前在看的那个会话**播一段——隔壁会话跑完自动念一遍的入口（见第一节之四） |
+| 改 `latestAssistantMessageId` | 认**记忆反思轮**，那一轮不念、改念上一条（见第一节之五） |
 
 流式中间帧也照顾到了：`<style>` 已开、`</style>` 还没到时，从开标签处截断，宁可少念半句也不念 CSS。
 
@@ -149,6 +150,51 @@ sessions.list 里发现 running 且非主视图的会话
 
 同一时刻只有一路播放（单声道）。watcher 内部排队：正在播就等它完，播完续跑下一条。`autoPlay` 关掉时队列清空不播。
 
+## 一之五、记忆反思轮不念：改念上一条
+
+meow-memory 会定时往会话里插一条「记忆反思任务」，那一轮的回复（通常是一张"记忆反思·本轮封存"卡）是给系统看的记录，不是给人听的话。自动播报要是把它念出来，耳朵里就是一串记账。
+
+老大原话（2026-10-15）：**「如果最新一条是记忆反思任务就改为念上一条。」**
+
+### 怎么认出"这一条是反思产物"
+
+反思任务以 `agent/inbox/spliced`（target `next-turn`）注入，在 chat nodes 里落成一条**非 assistant** 节点：
+
+| 实测项 | 值 |
+| --- | --- |
+| 节点 kind | `context`（被 next-turn claim 时是 `turn-trigger`）；真人消息是 `user` |
+| 文本位置 | `node.content` 数组里的 `text`（**扁平挂在节点上，不在 `node.data` 里**） |
+| 文本开头 | `[meow-memory-reflect] 记忆反思任务` |
+| `source.kind` | `plugin:meow-memory` |
+
+**`source.kind` 单独不够用**：长期记忆注入（`===== 长期记忆 =====`）和"可能相关的记忆，仅供参考"用的是同一个 kind。判据必须是文本里的 `meow-memory-reflect` 标记。
+
+### 怎么把 assistant 跟它的触发注入关联
+
+不能按"往前找最近一条非 assistant 节点"——一轮里有多个 step、每个 step 一条 assistant 节点，夹在中间会误判。用 `node.turn`：
+
+```
+从目标 assistant 节点往前扫
+  遇到同 turn 的更早 assistant  → 继续（同一个反思轮里的中间 step）
+  遇到别的 turn 的 assistant    → 返回 false（越过轮的边界了）
+  遇到文本含 meow-memory-reflect → 返回 true
+```
+
+### 落点为什么在 `latestAssistantMessageId`
+
+那是"最新一条该念的 assistant"的唯一出口：主视图的 `ReadAloudAction`（自动播报判据 `message.latestMessageId === messageId`）与 `SessionPlaybackObserver` 都走它，改一处两条路一起生效。跨会话观察者的 `collect` 是自扫 nodes 的，在那边补了同样一行。
+
+### 边界
+
+- **去重仍然生效。** 上一条若已经被播过（`automaticallyPlayed` / 跨会话的 `played`），不会因为这次"改念上一条"而重念一遍——净效果是**这一轮不响**。老大要的是"别念反思废话"，这条边界正是那个效果。想强制重念，得再要一个开关。
+- **真人消息里恰好写了 `meow-memory-reflect` 会误判**（把那一轮当成反思轮）。可接受：这个串不会出现在正常对话里。
+- **连着一轮一轮反思**时一路往前取，直到撞到非反思轮为止。
+
+### 实测
+
+- 离线：从落盘的 `client.js` 抠出真实的 `nodePlainText` / `isMemoryReflectTurn` / `latestAssistantMessageId` 喂桩，10 用例全过（最新是反思产物→取上一条 / 最新非反思→原样 / 同 turn 多 step 全跳 / 长期记忆注入不误判 / 相关记忆注入不误判 / 连续两轮反思 / `turn-trigger` 形态也认 / 空 nodes→null / 真人提到该串的已知副作用 / `nodePlainText` 同时读 `content` 与 `blocks`）。
+- 真实会话：对一条**确实含反思轮**的会话（`session-8c6a4850`，348 节点、19 处含该标记）调落盘代码——原函数取到 `8023d9dd`（`isMemoryReflectTurn` = true，反思产物），新函数取到 `98883812`（同 turn、非反思），`changed: true`。
+
 ## 二、为什么走 pnpm patch，而不是改 node_modules
 
 这是**教训**，不是偏好。
@@ -180,7 +226,7 @@ node scripts/patch.mjs upgrade --to 3.1.0     # 指定目标版本，默认按�
 
 ```
 ✓ 登记：pnpm-workspace.yaml 的 patchedDependencies → dsh-xiaomi-tts@3.0.8
-✓ lockfile hash 与补丁正本一致：9e5f5d1a0c43a684…
+✓ lockfile hash 与补丁正本一致：7bfbacda8b612161…
 ✓ 落盘：lib/client.js 已应用
 ✓ 落盘：lib/shared-DQIrhcy-.js 已应用
 ```
@@ -266,8 +312,8 @@ pnpm patch <包>@<版本>              → 这回才是干净的上游原样
 
 结果是**完全一致**。端到端演练（把补丁文件名伪装成旧版本、逼 `upgrade` 走完整
 流程）生成的补丁，sha256 与原正本逐字节相同。补丁从 4120 字节一路长到现在的
-21868 字节（`spoken-override` → 6144、`spoken-override-entry` → 6921、切会话不打断
-→ 14883、跨会话自动播报 → 21868），每一次 `redo` 都是一次实测，重放始终逐字节可复现。
+23356 字节（`spoken-override` → 6144、`spoken-override-entry` → 6921、切会话不打断
+→ 14883、跨会话自动播报 → 21868、反思轮跳过 → 23356），每一次 `redo` 都是一次实测，重放始终逐字节可复现。
 
 ## 五、启动自检：它不会悄悄死掉
 
