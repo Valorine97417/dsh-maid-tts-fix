@@ -1,5 +1,5 @@
 diff --git a/lib/client.js b/lib/client.js
-index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..02b2dba6617d09854eb5757d348a4ee49afaeeee 100644
+index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..37fe48a386cadfc574f16e62195a4e7636d2f579 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -303,11 +303,21 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
@@ -31,7 +31,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..02b2dba6617d09854eb5757d348a4ee4
  /** Apply the configured playback range and Smart automatic closing cue to a completed reply. */
 +/** 回复里写了 <!--tts:…--> 就念它，没写返回 undefined 走原逻辑。 */
 +function extractTtsSpokenOverride(value) {
-+	const match = /<!--\s*tts:([\s\S]*?)-->/.exec(value);
++	const match = /<!--\s*tts:([\s\S]*?)-->/.exec(value) ?? /<!--\s*tts:([\s\S]*?)--(?=\s*(?:\n|$))/.exec(value);
 +	if (match === null) return void 0;
 +	const spoken = match[1].replace(/\s+/g, " ").trim();
 +	return spoken.length === 0 ? void 0 : spoken;
@@ -452,7 +452,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..02b2dba6617d09854eb5757d348a4ee4
  		const volume = resolveTtsSettings(scope.getSnapshot().value).voiceVolume;
  		live.setVolume(volume);
 diff --git a/lib/shared-DQIrhcy-.js b/lib/shared-DQIrhcy-.js
-index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..e310cdd490d9345fdc42d24dde8029afdb7a593b 100644
+index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..fdc540159454999ed6b2bc3f80fe15656d889a31 100644
 --- a/lib/shared-DQIrhcy-.js
 +++ b/lib/shared-DQIrhcy-.js
 @@ -323,11 +323,21 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
@@ -484,7 +484,7 @@ index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..e310cdd490d9345fdc42d24dde8029af
  /** Apply the configured playback range and Smart automatic closing cue to a completed reply. */
 +/** 回复里写了 <!--tts:…--> 就念它，没写返回 undefined 走原逻辑。 */
 +function extractTtsSpokenOverride(value) {
-+	const match = /<!--\s*tts:([\s\S]*?)-->/.exec(value);
++	const match = /<!--\s*tts:([\s\S]*?)-->/.exec(value) ?? /<!--\s*tts:([\s\S]*?)--(?=\s*(?:\n|$))/.exec(value);
 +	if (match === null) return void 0;
 +	const spoken = match[1].replace(/\s+/g, " ").trim();
 +	return spoken.length === 0 ? void 0 : spoken;
