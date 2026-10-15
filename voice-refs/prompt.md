@@ -18,7 +18,9 @@
 1. **改完必须重启 DSH。**
 2. **插件设置面板里的本地值会盖过文件**——面板里贴过值，改文件就不生效，两边要一致。
 
-同段配套值：`model: mimo-v2.5-tts-voicedesign`（只有这个模型才发送 `voiceDesignPrompt`）、`format: pcm`、`readScope: smart`、`voiceRate: 1`（**别调，PCM 流式路径变速即变调**）。
+同段配套值：`model: mimo-v2.5-tts-voicedesign`（只有这个模型才发送 `voiceDesignPrompt`）、`format: pcm`、`readScope: first-segment`、`voiceRate: 1`（**别调，PCM 流式路径变速即变调**）。
+
+> `readScope` 2026-10-15 由 `smart` 改 `first-segment`：上游 `smart` 档在**没写标记**时会念全文，而「每条回复都写标记」是纪律型机制、必漏（实测最近 40 条回复 35 条无标记）。换成上游原生的首段档兜底——没标记也只念首段约 160 字，写了标记仍优先念标记。代价：手动点历史消息同样只念首段，要全文得靠标记装。备份 `cordis.patch.yml.bak-firstseg-20261015-0450`。
 
 ## 定稿（2026-10-14 · C 组）
 
