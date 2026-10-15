@@ -171,11 +171,14 @@ meow-memory 会定时往会话里插一条「记忆反思任务」，那一轮�
 ```
 从本轮的起点 assistant 往前扫
   先撞见别的 assistant      → 这一轮没有可见输入 → 是反思轮（返回 true）
+  先撞见 meow-memory 的反思注入 → 也是反思轮（返回 true）
   先撞见 user/steering/context/turn-trigger → 有可见输入 → 正常轮（返回 false）
   model-retry / turn-max-tokens 这类系统节点不是输入，跳过继续往前找
 ```
 
 一轮多 step 时同 turn 有多条 assistant，要先回退到本轮**最早**那条再往前扫，否则"同 turn 的更早 assistant"会被误当成"别的轮的 assistant"。
+
+**第二道判据是 0.6.2 补的。** 上面那条"撞见 `context` 就算有输入"有个缺口：**没被 claim 的反思注入本身就以 `context` 形态留在 `legacy` 里**——会话第一轮的反思任务就是这种。这时往前扫先撞见的就是它自己，被判成"有可见输入"，于是首轮反思照念。补法是先加一道 `isReflectInjection(previous)`：输入型节点若本身就是 `source.kind === "plugin:meow-memory"` 且文本含 `meow-memory-reflect`，也算反思轮。
 
 ### 落点为什么在 `latestAssistantMessageId`
 
@@ -188,9 +191,11 @@ meow-memory 会定时往会话里插一条「记忆反思任务」，那一轮�
 
 ### 实测
 
-- 真值对照：以 `snap.nodes.byKey` 里含 `meow-memory-reflect` 的 `turn-trigger` 节点的 `anchorSeq` 为真值（那份投影里注入还在），在 **19 个会话 / 21 个反思轮**上比对新判据——**零假阳、零假阴**。顺带否掉了两个更简单的候选：只看"前一个节点不是输入型"会误判 `model-retry`（1 处假阳），只看"前一个节点是 assistant"会漏掉 `turn-max-tokens` / `model-retry`（2 处假阴）。
-- 离线：从落盘的 `client.js` 抠出真实的 `isMemoryReflectTurn` / `latestAssistantMessageId` 喂桩，全用例通过。
-- 真实会话：对一条**确实含反思轮**的会话调落盘代码，原逻辑取到的反思产物被跳过、改取同轮内更早那条（`changed: true`）。
+- 真值对照：以 `snap.nodes.byKey` 里 `source.kind === "plugin:meow-memory"` 且文本含 `meow-memory-reflect` 的注入节点的 `anchorSeq` 为真值（那份投影里注入还在），在 **42 个会话 / 21 个含反思的会话 / 28 个反思轮**上比对新判据——**零假阳、零假阴**。第一版判据（只有 INPUT_NODE_KINDS 那一道）漏 2 处（`dee6e427` 的 turn 84、`df8018f8` 的 turn 18，都是首轮 `context` 形态），加 `isReflectInjection` 后归零。
+- 顺带否掉了两个更简单的候选：只看"前一个节点不是输入型"会误判 `model-retry`（1 处假阳），只看"前一个节点是 assistant"会漏掉 `turn-max-tokens` / `model-retry`（2 处假阴）。
+- 真值口径踩过的坑：一开始拿 `legacy.nodes` 里"文本含 `meow-memory-reflect`"当真值，结果把老大自己打的字（"还是会读[meow-memory-reflect]…"）和一堆 tool-result 里的回显全算进去了，报出 130 处假阳。**真值必须取自 `snap.nodes.byKey` 且带 `source.kind` 过滤。**
+- 端到端：42 个会话里 13 个的 `latestAssistantMessageId` 结果真的回退到了上一轮，且这 13 个全部来自含反思的会话。
+- 离线：从落盘的 `client.js` 抠出真实的 `isReflectInjection` / `isMemoryReflectTurn` / `latestAssistantMessageId` 喂桩，全用例通过。
 
 ## 二、为什么走 pnpm patch，而不是改 node_modules
 
@@ -223,7 +228,7 @@ node scripts/patch.mjs upgrade --to 3.1.0     # 指定目标版本，默认按�
 
 ```
 ✓ 登记：pnpm-workspace.yaml 的 patchedDependencies → dsh-xiaomi-tts@3.0.8
-✓ lockfile hash 与补丁正本一致：dfaeec1305f02c17…
+✓ lockfile hash 与补丁正本一致：b8fb790fa119ad1e…
 ✓ 落盘：lib/client.js 已应用
 ✓ 落盘：lib/shared-DQIrhcy-.js 已应用
 ```
@@ -309,9 +314,9 @@ pnpm patch <包>@<版本>              → 这回才是干净的上游原样
 
 结果是**完全一致**。端到端演练（把补丁文件名伪装成旧版本、逼 `upgrade` 走完整
 流程）生成的补丁，sha256 与原正本逐字节相同。补丁从 4120 字节一路长到现在的
-23082 字节（`spoken-override` → 6144、`spoken-override-entry` → 6921、切会话不打断
-→ 14883、跨会话自动播报 → 21868、反思轮跳过初版 → 23356、判据修正 → 23082），
-每一次 `redo` 都是一次实测，重放始终逐字节可复现。
+23463 字节（`spoken-override` → 6144、`spoken-override-entry` → 6921、切会话不打断
+→ 14883、跨会话自动播报 → 21868、反思轮跳过初版 → 23356、判据修正 → 23082、
+首轮反思补判据 → 23463），每一次 `redo` 都是一次实测，重放始终逐字节可复现。
 
 ## 五、启动自检：它不会悄悄死掉
 
