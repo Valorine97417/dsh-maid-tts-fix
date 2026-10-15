@@ -158,27 +158,24 @@ meow-memory 会定时往会话里插一条「记忆反思任务」，那一轮�
 
 ### 怎么认出"这一条是反思产物"
 
-反思任务以 `agent/inbox/spliced`（target `next-turn`）注入，在 chat nodes 里落成一条**非 assistant** 节点：
+反思任务以 `agent/inbox/spliced`（target `next-turn`）注入。它在 chat 视图里确实存在——`snap.nodes.byKey` 里能看到，kind 是 `context`（被 next-turn claim 时是 `turn-trigger`），`content` 数组里的文本以 `[meow-memory-reflect] 记忆反思任务` 开头，`source.kind` 是 `plugin:meow-memory`。
 
-| 实测项 | 值 |
-| --- | --- |
-| 节点 kind | `context`（被 next-turn claim 时是 `turn-trigger`）；真人消息是 `user` |
-| 文本位置 | `node.content` 数组里的 `text`（**扁平挂在节点上，不在 `node.data` 里**） |
-| 文本开头 | `[meow-memory-reflect] 记忆反思任务` |
-| `source.kind` | `plugin:meow-memory` |
+**但插件拿不到它。** 上游插件走的是 `useChat` 的 `legacy` 投影，而 `ui-chat-client.js` 的 `legacyContribution` 只认 `user` / `steering` / `context` / `command` 这几种 kind —— `turn-trigger` 不在其中，投影时直接返回 EMPTY。于是 `legacy.nodes` 里**根本没有那条注入**，任何"文本里找 `meow-memory-reflect`"的判据都永远命中不了。
 
-**`source.kind` 单独不够用**：长期记忆注入（`===== 长期记忆 =====`）和"可能相关的记忆，仅供参考"用的是同一个 kind。判据必须是文本里的 `meow-memory-reflect` 标记。
+（0.6.0 就是栽在这里：判据写得没错，但它依赖的那条节点早被投影丢了，线上完全不生效。）
 
-### 怎么把 assistant 跟它的触发注入关联
+### 实际可用的判据：看这一轮前面有没有"可见输入"
 
-不能按"往前找最近一条非 assistant 节点"——一轮里有多个 step、每个 step 一条 assistant 节点，夹在中间会误判。用 `node.turn`：
+既然注入不可见，就换个角度——**真人说话必然留下可见的 `user` 节点，而不可见的注入不会**：
 
 ```
-从目标 assistant 节点往前扫
-  遇到同 turn 的更早 assistant  → 继续（同一个反思轮里的中间 step）
-  遇到别的 turn 的 assistant    → 返回 false（越过轮的边界了）
-  遇到文本含 meow-memory-reflect → 返回 true
+从本轮的起点 assistant 往前扫
+  先撞见别的 assistant      → 这一轮没有可见输入 → 是反思轮（返回 true）
+  先撞见 user/steering/context/turn-trigger → 有可见输入 → 正常轮（返回 false）
+  model-retry / turn-max-tokens 这类系统节点不是输入，跳过继续往前找
 ```
+
+一轮多 step 时同 turn 有多条 assistant，要先回退到本轮**最早**那条再往前扫，否则"同 turn 的更早 assistant"会被误当成"别的轮的 assistant"。
 
 ### 落点为什么在 `latestAssistantMessageId`
 
@@ -187,13 +184,13 @@ meow-memory 会定时往会话里插一条「记忆反思任务」，那一轮�
 ### 边界
 
 - **去重仍然生效。** 上一条若已经被播过（`automaticallyPlayed` / 跨会话的 `played`），不会因为这次"改念上一条"而重念一遍——净效果是**这一轮不响**。老大要的是"别念反思废话"，这条边界正是那个效果。想强制重念，得再要一个开关。
-- **真人消息里恰好写了 `meow-memory-reflect` 会误判**（把那一轮当成反思轮）。可接受：这个串不会出现在正常对话里。
 - **连着一轮一轮反思**时一路往前取，直到撞到非反思轮为止。
 
 ### 实测
 
-- 离线：从落盘的 `client.js` 抠出真实的 `nodePlainText` / `isMemoryReflectTurn` / `latestAssistantMessageId` 喂桩，10 用例全过（最新是反思产物→取上一条 / 最新非反思→原样 / 同 turn 多 step 全跳 / 长期记忆注入不误判 / 相关记忆注入不误判 / 连续两轮反思 / `turn-trigger` 形态也认 / 空 nodes→null / 真人提到该串的已知副作用 / `nodePlainText` 同时读 `content` 与 `blocks`）。
-- 真实会话：对一条**确实含反思轮**的会话（`session-8c6a4850`，348 节点、19 处含该标记）调落盘代码——原函数取到 `8023d9dd`（`isMemoryReflectTurn` = true，反思产物），新函数取到 `98883812`（同 turn、非反思），`changed: true`。
+- 真值对照：以 `snap.nodes.byKey` 里含 `meow-memory-reflect` 的 `turn-trigger` 节点的 `anchorSeq` 为真值（那份投影里注入还在），在 **19 个会话 / 21 个反思轮**上比对新判据——**零假阳、零假阴**。顺带否掉了两个更简单的候选：只看"前一个节点不是输入型"会误判 `model-retry`（1 处假阳），只看"前一个节点是 assistant"会漏掉 `turn-max-tokens` / `model-retry`（2 处假阴）。
+- 离线：从落盘的 `client.js` 抠出真实的 `isMemoryReflectTurn` / `latestAssistantMessageId` 喂桩，全用例通过。
+- 真实会话：对一条**确实含反思轮**的会话调落盘代码，原逻辑取到的反思产物被跳过、改取同轮内更早那条（`changed: true`）。
 
 ## 二、为什么走 pnpm patch，而不是改 node_modules
 
@@ -226,7 +223,7 @@ node scripts/patch.mjs upgrade --to 3.1.0     # 指定目标版本，默认按�
 
 ```
 ✓ 登记：pnpm-workspace.yaml 的 patchedDependencies → dsh-xiaomi-tts@3.0.8
-✓ lockfile hash 与补丁正本一致：7bfbacda8b612161…
+✓ lockfile hash 与补丁正本一致：dfaeec1305f02c17…
 ✓ 落盘：lib/client.js 已应用
 ✓ 落盘：lib/shared-DQIrhcy-.js 已应用
 ```
@@ -312,8 +309,9 @@ pnpm patch <包>@<版本>              → 这回才是干净的上游原样
 
 结果是**完全一致**。端到端演练（把补丁文件名伪装成旧版本、逼 `upgrade` 走完整
 流程）生成的补丁，sha256 与原正本逐字节相同。补丁从 4120 字节一路长到现在的
-23356 字节（`spoken-override` → 6144、`spoken-override-entry` → 6921、切会话不打断
-→ 14883、跨会话自动播报 → 21868、反思轮跳过 → 23356），每一次 `redo` 都是一次实测，重放始终逐字节可复现。
+23082 字节（`spoken-override` → 6144、`spoken-override-entry` → 6921、切会话不打断
+→ 14883、跨会话自动播报 → 21868、反思轮跳过初版 → 23356、判据修正 → 23082），
+每一次 `redo` 都是一次实测，重放始终逐字节可复现。
 
 ## 五、启动自检：它不会悄悄死掉
 

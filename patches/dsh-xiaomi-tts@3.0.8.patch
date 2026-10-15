@@ -1,5 +1,5 @@
 diff --git a/lib/client.js b/lib/client.js
-index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..77d9722dd76eceddca360529a89303f7bc675605 100644
+index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..7ecae128c0e3efa5db5cd714f5746c8b7d5899a1 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -303,11 +303,21 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
@@ -255,27 +255,22 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..77d9722dd76eceddca360529a89303f7
  	}
  	return "";
  }
-@@ -1940,10 +1991,32 @@ function messageTime(legacy, messageId) {
+@@ -1940,10 +1991,27 @@ function messageTime(legacy, messageId) {
  	for (const node of legacy.nodes) if (node.kind === "assistant" && node.messageId === messageId) return node.time;
  	return null;
  }
-+function nodePlainText(node) {
-+	const parts = [];
-+	if (Array.isArray(node?.content)) for (const item of node.content) if (typeof item?.text === "string") parts.push(item.text);
-+	if (Array.isArray(node?.blocks)) for (const block of node.blocks) if (typeof block?.text === "string") parts.push(block.text);
-+	return parts.join("\n");
-+}
++const INPUT_NODE_KINDS = new Set(["user", "steering", "context", "turn-trigger"]);
 +function isMemoryReflectTurn(legacy, index) {
 +	const nodes = legacy.nodes;
 +	const node = nodes[index];
-+	if (node === void 0) return false;
++	if (node === void 0 || node.turn === void 0) return false;
 +	for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
 +		const previous = nodes[cursor];
 +		if (previous?.kind === "assistant") {
-+			if (node.turn !== void 0 && previous.turn === node.turn) continue;
-+			return false;
++			if (previous.turn === node.turn) continue;
++			return true;
 +		}
-+		if (nodePlainText(previous).includes("meow-memory-reflect")) return true;
++		if (INPUT_NODE_KINDS.has(previous?.kind)) return false;
 +	}
 +	return false;
 +}
@@ -289,7 +284,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..77d9722dd76eceddca360529a89303f7
  	}
  	return null;
  }
-@@ -6842,6 +6915,138 @@ function installTaskSoundWatcher(ctx, controller, getSettings) {
+@@ -6842,6 +6910,138 @@ function installTaskSoundWatcher(ctx, controller, getSettings) {
  	};
  }
  
@@ -428,7 +423,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..77d9722dd76eceddca360529a89303f7
  //#endregion
  //#region src/client/style/action.css?raw
  var action_default = "/*\r\n * Read-aloud action button in the assistant message toolbar.\r\n */\r\n\r\n.xmimo-tts-action {\r\n  width: calc(28px + var(--dsh-content-font-delta, 0px));\r\n  height: calc(28px + var(--dsh-content-font-delta, 0px));\r\n  border-radius: var(--dsw-radius-sm);\r\n  color: var(--dsw-alias-label-tertiary);\r\n  cursor: pointer;\r\n  background: transparent;\r\n  border: none;\r\n  justify-content: center;\r\n  align-items: center;\r\n  padding: 6px;\r\n  display: inline-flex;\r\n}\r\n\r\n.xmimo-tts-action:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover) !important;\r\n  color: var(--dsw-alias-label-secondary);\r\n}\r\n\r\n.xmimo-tts-action:disabled {\r\n  cursor: default;\r\n  opacity: 0.45;\r\n}\r\n\r\n.xmimo-tts-spin {\r\n  animation: xmimo-spin 1s linear infinite;\r\n}\r\n\r\n@keyframes xmimo-spin {\r\n  to {\r\n    transform: rotate(360deg);\r\n  }\r\n}\r\n";
-@@ -6945,7 +7150,8 @@ const inject = [
+@@ -6945,7 +7145,8 @@ const inject = [
  	"locale",
  	"remote",
  	"configForms",
@@ -438,7 +433,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..77d9722dd76eceddca360529a89303f7
  ];
  function formatStartupError(error) {
  	return error instanceof Error ? error.message : String(error);
-@@ -7015,6 +7221,7 @@ function apply(ctx) {
+@@ -7015,6 +7216,7 @@ function apply(ctx) {
  	playback.setBeforePlayback(stopOptionalPcm);
  	live.setStateChangeListener((sessionId, messageId, status) => playback.updateLivePlayback(sessionId, messageId, status, "live"));
  	local.setStateChangeListener((sessionId, messageId, status, error) => playback.updateLivePlayback(sessionId, messageId, status, "system", error));
