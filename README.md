@@ -1,6 +1,6 @@
 # dsh-maid-tts-fix
 
-DSH 小困插件 · **朗读与音色维护层**：给 [dsh-xiaomi-tts](https://github.com/ppy-web/dsh-plugin-xiaomi-mimo-tts) 装上能跨行的 `style`/`script` 剥离，让 VCP 卡片的 CSS 不再被念出来；并**盯着这个补丁别掉**。音色提示词的定稿与参照样本说明也收在这里。
+DSH 小困插件 · **朗读与音色维护层**：给 [dsh-xiaomi-tts](https://github.com/ppy-web/dsh-plugin-xiaomi-mimo-tts) 装上能跨行的 `style`/`script` 剥离，让 VCP 卡片的 CSS 不再被念出来；切会话不掐断朗读；**隔壁会话跑完也自动念一遍**；并**盯着这个补丁别掉**。音色提示词的定稿与参照样本说明也收在这里。
 
 ## 一、病根：漂亮的卡片，念出来是 CSS
 
@@ -18,7 +18,7 @@ VCP 卡片的样式写在 `<style>` 块里，而 CSS 是**多行**的。这个�
 
 不是"不知道念哪一段"，是**念了不该念的**——卡片做得越精致，念出来的垃圾越多。
 
-补丁做两件事：**别念出 CSS**（改两处文件各一遍），以及**只念重点**（见第一节之二）。`lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一个函数的两个副本，漏一个就等于没修。
+补丁做三件事：**别念出 CSS**（改两处文件各一遍）、**只念重点**（见第一节之二）、**切会话不打断且隔壁跑完也念**（见第一节之三、之一之四）。`lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一个函数的两个副本，漏一个就等于没修（跨会话那几段只在 `client.js`——`PlaybackController` 只存在于客户端那份）。
 
 | 改动 | 做什么 |
 | --- | --- |
@@ -28,6 +28,7 @@ VCP 卡片的样式写在 `<style>` 块里，而 CSS 是**多行**的。这个�
 | 接进 `messageText` 的**清洗之前** | 真正的入口。清洗会把标记当 HTML 标签吃掉（见第一节之二） |
 | 接进 `applyTtsPlaybackScope` | 双保险：自动播报那条链路不经过 `messageText` |
 | 新增 `playbackOwnerId`（播放归属） | 把「UI 在看哪个会话」和「播放属于谁」拆开——切会话不再掐断朗读（见第一节之三） |
+| 新增 `remoteSessionId` + `playRemote()` | 给**不是当前在看的那个会话**播一段——隔壁会话跑完自动念一遍的入口（见第一节之四） |
 
 流式中间帧也照顾到了：`<style>` 已开、`</style>` 还没到时，从开标签处截断，宁可少念半句也不念 CSS。
 
@@ -106,7 +107,47 @@ v6.40 为什么没用：`<!--tts:…-->` 前后有空行时，会被切成**独�
 
 行为探针：`_probe/tts-switch-probe.mjs`——用 `cutFunction` 从落盘的 client.js 抠出**真实的** `PlaybackController` 类，在 `node:vm` 沙箱里喂桩，7 组场景 20 用例全过（播放中切走不停 / 空闲切走正常清 / 不越权 cancel / 归属 cancel 停 / 手动暂停后切回来还是暂停态 / 循环判据不再看 activeSessionId / 空闲切回正常重置）。探针第一版把 `releaseCurrentAudio` 桩掉了，结果 `stopCurrent` 清空链断了、误报一堆——**桩要贴着真实生命周期给，别图省事**。
 
-一句边界：**隔壁会话完成任务自动播报不在此列**。上游的自动播报触发器只挂在当前渲染着的消息组件里，隔壁会话的组件切走就卸载了——要那个得另起一套全局监听，改动量和风险都不是一个量级，没顺手做。
+一句边界：这一节管的是**已经开播之后**不被切会话掐断；「**隔壁会话跑完了自动念一遍**」是另一套全局观察者，见第一节之四（2026-10-15 补上，原先这里写的是"没顺手做"）。
+
+## 一之四、隔壁会话跑完也念一遍：跨会话自动播报
+
+上游的自动播报触发器挂在**当前渲染着的那条消息组件**里（`conversation.chat.assistant-actions` 槽位的 `ReadAloudAction`）。切走 = 组件卸载 = 触发器没了。所以「在隔壁会话里干活，跑完了念一声」上游做不到。
+
+补丁补上这一段：一个与「当前在看哪个会话」无关的全局观察者。
+
+```
+sessions.list 里发现 running 且非主视图的会话
+  → sessions.retain(id, { source }) 拿 binding
+  → conversation.binding(binding).target("chat")
+  → 订阅 binding.session，盯 running 的 落边沿（true → false）
+  → 取最后一条带 text 的 assistant 正文
+  → playback.playRemote(id, messageId, text) 排队播
+  → release retain
+```
+
+**`playRemote` 就是第一节之三那套的解药**：它临时把 `remoteSessionId` 设成目标会话，`ownsSession()` 因此放行，播完还原——`activeSessionId`（UI 在看哪个会话）全程不动。运行时实测：播隔壁时 `activeSessionId` 仍是主视图会话，`playbackOwnerId` 切到隔壁，合成请求 `POST /plugins/xiaomi-mimo-tts/synthesize` 与 blob 播放都真的发生。
+
+主视图会话**跳过**——它归上游 `ReadAloudAction` 管，两边都来会念两遍。
+
+### 三条实测约束（写错任何一条都拿不到正文）
+
+| 约束 | 症状 | 为什么 |
+| --- | --- | --- |
+| chat target 拿到后**必须先 `subscribe` 一次** | 首次 `getSnapshot()` 恒为 `undefined`，等 1.5s 也没用 | 快照是订阅驱动的，不订阅不产出 |
+| **必须等 running 落下去再取，且留一拍** | 运行中的会话，58 条 assistant 只有 1 条带 text 块 | 正文是跑完才落进 nodes 的 |
+| retain **必须 release** | 那个会话永远不会 retire，内存与列表都留着 | retain 是引用计数，计数不归零 scope 不回收 |
+
+第一条最反直觉：`await ref.ready` 之后直接 `getSnapshot()` 还是 `undefined`，容易误判成"拿不到正文"。
+
+### 与上游 `installTaskSoundWatcher` 的关系
+
+上游已经有一个跨会话观察者——**音效**那个（`installTaskSoundWatcher`）。它用同一套 `binding.session.subscribe` + running 边沿检测，但只盯 `retainedBy.mainView > 0` 的会话（当前在看的），因为它服务的是"你正在等的那个回合跑完了"。本补丁的观察者是它的**跨会话版**：按会话列表里的 `running` 发现目标，不看 mainView。
+
+**实测证据**（2026-10-15，真实渲染进程）：watcher 挂上后，两个正在跑的隔壁会话都被 retain，`retainedBy` 里出现 `xiaomi-mimo-tts-cross-session`；手动对隔壁已跑完会话调 `playRemote`，合成与播放全通、当前会话不被抢。
+
+### 队列
+
+同一时刻只有一路播放（单声道）。watcher 内部排队：正在播就等它完，播完续跑下一条。`autoPlay` 关掉时队列清空不播。
 
 ## 二、为什么走 pnpm patch，而不是改 node_modules
 
@@ -139,7 +180,7 @@ node scripts/patch.mjs upgrade --to 3.1.0     # 指定目标版本，默认按�
 
 ```
 ✓ 登记：pnpm-workspace.yaml 的 patchedDependencies → dsh-xiaomi-tts@3.0.8
-✓ lockfile hash 与补丁正本一致：50a87d6ca955c9ba…
+✓ lockfile hash 与补丁正本一致：9e5f5d1a0c43a684…
 ✓ 落盘：lib/client.js 已应用
 ✓ 落盘：lib/shared-DQIrhcy-.js 已应用
 ```
@@ -224,9 +265,9 @@ pnpm patch <包>@<版本>              → 这回才是干净的上游原样
 3. 逐字节比对重放结果与 patch-commit 出来的版本
 
 结果是**完全一致**。端到端演练（把补丁文件名伪装成旧版本、逼 `upgrade` 走完整
-流程）生成的补丁，sha256 与原正本逐字节相同。加上 `spoken-override` 那条编辑之后
-补丁变了（4120 → 6144 字节），再加 `spoken-override-entry`（4120 → 6921 字节），
-重放仍逐字节可复现——`redo` 本身就是一次实测。
+流程）生成的补丁，sha256 与原正本逐字节相同。补丁从 4120 字节一路长到现在的
+21868 字节（`spoken-override` → 6144、`spoken-override-entry` → 6921、切会话不打断
+→ 14883、跨会话自动播报 → 21868），每一次 `redo` 都是一次实测，重放始终逐字节可复现。
 
 ## 五、启动自检：它不会悄悄死掉
 
@@ -242,7 +283,7 @@ pnpm patch <包>@<版本>              → 这回才是干净的上游原样
 
 ## 六、边界
 
-- **只做朗读文本清洗这一件事。** 补丁不碰音色、不碰插件配置、不碰插件其余部分。（音色提示词存在本仓 `voice-refs/`，但那是**文档**，不是补丁的一部分——补丁本身一个字节都不涉及它。）
+- **只做朗读这一件事。** 补丁只碰朗读的文本清洗、播放归属与自动播报触发，不碰音色、不碰插件配置、不碰插件其余部分。（音色提示词存在本仓 `voice-refs/`，但那是**文档**，不是补丁的一部分——补丁本身一个字节都不涉及它。）
 - **不改上游一个字节以外的任何东西。** 补丁全部内容都在 `patches/*.patch` 里，`install`/`remove` 之外不写 profile。
 - **补丁随包分发。** `patches/` 在 `package.json` 的 `files` 白名单里——这个包的意义就是携带补丁正本，丢了它就没意义。
 - 上游哪天自己修好了，`verify` 会报「落盘：未应用」而不是假装成功——那正是该退休的信号。
