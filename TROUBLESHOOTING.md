@@ -134,6 +134,14 @@
 - **验证**：在 **42 个会话 / 21 个含反思的会话 / 27 个反思轮**（README 记 28，两处口径不一，待核）上比对新判据，v2 **零假阳零假阴**；v1 漏 2 处（`dee6e427` 的 turn 84、`df8018f8` 的 turn 18，都是首轮 `context` 形态）。真值口径必须取自 `snap.nodes.byKey` 且带 `source.kind` 过滤——一开始拿 `legacy.nodes` 文本匹配当真值，把老大自己打的字和 tool-result 回显全算进去，报出 130 处假阳。
 - **边界**：**去重仍生效**——上一条若已被播过，不会因为"改念上一条"而重念，净效果是**这一轮不响**；连着反思时一路往前取，直到撞到非反思轮。想强制重念得再加开关。
 
+### 2.9 写了标记、开着自动播报，念的还是全文+卡片（流式旁路漏挂）
+
+- **症状**：老大实测报障（2026-10-16）：「现在只念重点，并没有实现。反而在念输出的内容和卡片上的内容。」——回复开头明明写了 `<!--tts:…-->`，且切会话不打断、跨会话播报、反思轮跳过三项都正常，唯独听到的还是整段正文和卡片文字。
+- **原因**：标记提取需要挂**三处**，此前只挂了两处——`messageText`（手动点朗读）与 `applyTtsPlaybackScope`（跨会话自动播报）都吃标记，唯独**主视图流式播报**这条旁路 `scopedLiveText` 漏了：回复边生成边念，每帧拿 `partial` 的累积文本直接走 `extractMarkdownPlainText(prepareTtsText(value))` 清洗，`<!--tts:…-->` 在清洗里被当 HTML 标签吃掉，于是照旧念全文。老大开着 autoPlay，听到的恰恰就是这条旁路。**元教训**：0.6.1 落地时曾写下「两条路已验证，没有第三处」的断言——旁路排查必须 grep 全量清洗链入口（`grep -n "prepareTtsText\|scopedLiveText" lib/client.js`），旧结论不算免检金牌。
+- **解法**（0.6.4）：给 `scopedLiveText` 函数**第一行**（`full` 短路**之前**）补挂 `extractTtsSpokenOverride`——有标记时每帧返回同一稳定字符串，limiter 的单调性天然满足；放 full 之前是为了 readScope 切回 full 时标记依然优先。该函数只存在于 `lib/client.js`（shared 两份没有，实测 grep=0）。改 `lib/edits.js` 加 `spoken-override-live` 编辑 → `node scripts/patch.mjs redo` 重出补丁（32 条编辑）并自动落 profile。
+- **发布注记**：本版号一度错标 0.6.6——v0.6.4/v0.6.5 是公司电脑**误传**的分叉标签（不在 main 线上，已删），空出的号段应直接复用；跳号反而制造「又升两版」的假象。改号提交 `7ff4545` 拉齐。
+- **验证**：redo 全绿（node --check 过、patch-commit 落盘、verify 三项：登记 / hash / 落盘）；安装件 `lib/client.js` 里 `scopedLiveText` 头两行已是标记提取；最后一层是耳朵验收——重启 DSH、开自动播报，只应念标记那句。
+
 ---
 
 ## 三、音色与配置落点（voiceDesignPrompt、profile 配置、面板值优先）
