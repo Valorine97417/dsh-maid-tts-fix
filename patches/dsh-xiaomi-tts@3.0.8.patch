@@ -1,5 +1,5 @@
 diff --git a/lib/client.js b/lib/client.js
-index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..8ccef6026c86b0992a81ebb9a585b79829159fe3 100644
+index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67ae908e3b 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -303,11 +303,21 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
@@ -294,7 +294,16 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..8ccef6026c86b0992a81ebb9a585b798
  	}
  	return null;
  }
-@@ -6842,6 +6920,138 @@ function installTaskSoundWatcher(ctx, controller, getSettings) {
+@@ -1997,6 +2075,8 @@ function useApiKeySupported(active) {
+ 	return supported;
+ }
+ function scopedLiveText(value, scope, limiter, final = false) {
++	const spokenOverride = extractTtsSpokenOverride(value);
++	if (spokenOverride !== void 0) return spokenOverride;
+ 	if (resolveTtsReadScope(scope, true) === "full") return value;
+ 	const plain = (0, __deepseek_ai_dsh_client_ui_primitives.extractMarkdownPlainText)(prepareTtsText(value)).trim();
+ 	const scoped = limiter.limit(plain, final);
+@@ -6842,6 +6922,138 @@ function installTaskSoundWatcher(ctx, controller, getSettings) {
  	};
  }
  
@@ -433,7 +442,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..8ccef6026c86b0992a81ebb9a585b798
  //#endregion
  //#region src/client/style/action.css?raw
  var action_default = "/*\r\n * Read-aloud action button in the assistant message toolbar.\r\n */\r\n\r\n.xmimo-tts-action {\r\n  width: calc(28px + var(--dsh-content-font-delta, 0px));\r\n  height: calc(28px + var(--dsh-content-font-delta, 0px));\r\n  border-radius: var(--dsw-radius-sm);\r\n  color: var(--dsw-alias-label-tertiary);\r\n  cursor: pointer;\r\n  background: transparent;\r\n  border: none;\r\n  justify-content: center;\r\n  align-items: center;\r\n  padding: 6px;\r\n  display: inline-flex;\r\n}\r\n\r\n.xmimo-tts-action:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover) !important;\r\n  color: var(--dsw-alias-label-secondary);\r\n}\r\n\r\n.xmimo-tts-action:disabled {\r\n  cursor: default;\r\n  opacity: 0.45;\r\n}\r\n\r\n.xmimo-tts-spin {\r\n  animation: xmimo-spin 1s linear infinite;\r\n}\r\n\r\n@keyframes xmimo-spin {\r\n  to {\r\n    transform: rotate(360deg);\r\n  }\r\n}\r\n";
-@@ -6945,7 +7155,8 @@ const inject = [
+@@ -6945,7 +7157,8 @@ const inject = [
  	"locale",
  	"remote",
  	"configForms",
@@ -443,7 +452,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..8ccef6026c86b0992a81ebb9a585b798
  ];
  function formatStartupError(error) {
  	return error instanceof Error ? error.message : String(error);
-@@ -7015,6 +7226,7 @@ function apply(ctx) {
+@@ -7015,6 +7228,7 @@ function apply(ctx) {
  	playback.setBeforePlayback(stopOptionalPcm);
  	live.setStateChangeListener((sessionId, messageId, status) => playback.updateLivePlayback(sessionId, messageId, status, "live"));
  	local.setStateChangeListener((sessionId, messageId, status, error) => playback.updateLivePlayback(sessionId, messageId, status, "system", error));
