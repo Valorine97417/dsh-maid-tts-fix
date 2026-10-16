@@ -1,8 +1,8 @@
 diff --git a/lib/client.js b/lib/client.js
-index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67ae908e3b 100644
+index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..1b1610350d2017f74c4888581cb2a57f16ebc2e3 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -303,11 +303,21 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
+@@ -303,11 +303,52 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
  const MARKDOWN_BLOCKQUOTE_RE = /(^|\n)\s*>\s?/g;
  const MARKDOWN_INLINE_FORMAT_RE = /`+|[*_~]{1,3}/g;
  const MARKDOWN_TABLE_SEP_RE = /[|]/g;
@@ -16,16 +16,47 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
 +	const rest = withoutBlocks.slice(open);
 +	return MARKDOWN_STYLE_CLOSE_RE.test(rest) ? withoutBlocks : withoutBlocks.slice(0, open);
 +}
++function stripTtsCards(value) {
++	if (typeof value !== "string" || value.indexOf("vcp-root") < 0) return value;
++	const openRe = /<div\s+id=["']vcp-root["'][^>]*>/i;
++	const kept = [];
++	let cursor = 0;
++	while (cursor < value.length) {
++		const openMatch = openRe.exec(value.slice(cursor));
++		if (openMatch === null) break;
++		const openAt = cursor + openMatch.index;
++		const tagRe = /<div\b[^>]*>|<\/div\s*>/gi;
++		tagRe.lastIndex = openAt;
++		let depth = 0;
++		let match;
++		let end = -1;
++		while ((match = tagRe.exec(value)) !== null) {
++			if (match[0][1] === "/") {
++				depth -= 1;
++				if (depth === 0) { end = tagRe.lastIndex; break; }
++			} else {
++				depth += 1;
++			}
++		}
++		if (end < 0) break;
++		kept.push(value.slice(cursor, openAt));
++		cursor = end;
++	}
++	if (kept.length === 0) return value;
++	kept.push(value.slice(cursor));
++	const joined = kept.join(" ");
++	return joined.trim().length === 0 ? value : joined;
++}
  function removeTtsPaths(value) {
  	return value.replace(TTS_WINDOWS_PATH_PATTERN, " ").replace(TTS_RELATIVE_PATH_PATTERN, " ").replace(TTS_PROJECT_PATH_PATTERN, " ").replace(TTS_UNIX_PATH_PATTERN, " ");
  }
  function removeTtsMarkup(value) {
 -	let text = value.replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
-+	let text = stripTtsStyleBlocks(value).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
++	let text = stripTtsCards(stripTtsStyleBlocks(value)).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
  	text = text.replace(TTS_URL_PATTERN, " ");
  	return removeTtsPaths(text);
  }
-@@ -471,7 +481,16 @@ function appendTtsSmartTruncationOutro(fullText, spokenText, random = Math.rando
+@@ -471,7 +512,16 @@ function appendTtsSmartTruncationOutro(fullText, spokenText, random = Math.rando
  	return `${trimmed}${TTS_OUTRO_PAUSE_END.test(trimmed) ? "" : "。"}${TTS_SMART_TRUNCATION_OUTROS[index]}`;
  }
  /** Apply the configured playback range and Smart automatic closing cue to a completed reply. */
@@ -42,7 +73,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  	const scoped = applyTtsReadScope(value, resolveTtsReadScope(scope, automatic));
  	return scope === "smart" && automatic ? appendTtsSmartTruncationOutro(value, scoped, random) : scoped;
  }
-@@ -1496,6 +1515,8 @@ var PlaybackController = class {
+@@ -1496,6 +1546,8 @@ var PlaybackController = class {
  	request = null;
  	generation = 0;
  	activeSessionId = null;
@@ -51,7 +82,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  	beforePlayback = null;
  	volume = 1;
  	voiceRate = 1;
-@@ -1523,31 +1544,56 @@ var PlaybackController = class {
+@@ -1523,31 +1575,56 @@ var PlaybackController = class {
  	}
  	activateSession(sessionId) {
  		if (this.activeSessionId === sessionId) return;
@@ -113,7 +144,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  		this.publish(this.emptyView());
  	}
  	observeSession(sessionId, running, latestMessageId) {
-@@ -1586,7 +1632,7 @@ var PlaybackController = class {
+@@ -1586,7 +1663,7 @@ var PlaybackController = class {
  		});
  	}
  	pauseSegmented(sessionId, messageId) {
@@ -122,7 +153,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  		this.generation += 1;
  		this.stopCurrent();
  		this.publish({
-@@ -1598,7 +1644,8 @@ var PlaybackController = class {
+@@ -1598,7 +1675,8 @@ var PlaybackController = class {
  		});
  	}
  	async segmented(sessionId, messageId, text, automatic, fallback) {
@@ -132,7 +163,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  		this.beforePlayback?.();
  		const previous = this.segmentedState;
  		const resume = previous !== null && previous.sessionId === sessionId && previous.messageId === messageId;
-@@ -1657,7 +1704,7 @@ var PlaybackController = class {
+@@ -1657,7 +1735,7 @@ var PlaybackController = class {
  			let nextAudio = synthesize(segments[startIndex]);
  			for (let index = startIndex; index < segments.length; index += 1) {
  				const blob = await nextAudio;
@@ -141,7 +172,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  				if (this.segmentedState !== null) this.segmentedState.index = index;
  				if (index + 1 < segments.length) nextAudio = synthesize(segments[index + 1]);
  				const audio = new Audio(URL.createObjectURL(blob));
-@@ -1682,7 +1729,7 @@ var PlaybackController = class {
+@@ -1682,7 +1760,7 @@ var PlaybackController = class {
  					audio.addEventListener("ended", ended);
  					audio.addEventListener("error", failed);
  					audio.play().then(() => {
@@ -150,7 +181,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  							audioStarted = true;
  							this.publish({
  								sessionId,
-@@ -1696,12 +1743,12 @@ var PlaybackController = class {
+@@ -1696,12 +1774,12 @@ var PlaybackController = class {
  				});
  				this.segmentQueue = this.segmentQueue.filter((item) => item !== audio);
  			}
@@ -165,7 +196,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  				if (!audioStarted && fallback !== void 0) {
  					this.segmentedState = null;
  					this.publish(this.emptyView());
-@@ -1721,14 +1768,15 @@ var PlaybackController = class {
+@@ -1721,14 +1799,15 @@ var PlaybackController = class {
  		}
  	}
  	async toggle(sessionId, messageId, text, automatic, fallback, format = "mp3") {
@@ -183,7 +214,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  				this.publish({
  					sessionId,
  					messageId,
-@@ -1737,7 +1785,7 @@ var PlaybackController = class {
+@@ -1737,7 +1816,7 @@ var PlaybackController = class {
  					error: null
  				});
  			} catch {
@@ -192,7 +223,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  				this.publish({
  					sessionId,
  					messageId,
-@@ -1801,7 +1849,7 @@ var PlaybackController = class {
+@@ -1801,7 +1880,7 @@ var PlaybackController = class {
  				throw new Error(message);
  			}
  			const blob = await response.blob();
@@ -201,7 +232,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  			const url = URL.createObjectURL(blob);
  			const audio = new Audio(url);
  			audio.volume = this.volume;
-@@ -1811,12 +1859,12 @@ var PlaybackController = class {
+@@ -1811,12 +1890,12 @@ var PlaybackController = class {
  				url,
  				audio,
  				onEnded: () => {
@@ -216,7 +247,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  					this.releaseCurrentAudio(audio);
  					this.publish({
  						sessionId,
-@@ -1833,7 +1881,7 @@ var PlaybackController = class {
+@@ -1833,7 +1912,7 @@ var PlaybackController = class {
  			audio.addEventListener("error", current.onError);
  			try {
  				await audio.play();
@@ -225,7 +256,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  				this.publish({
  					sessionId,
  					messageId,
-@@ -1842,7 +1890,7 @@ var PlaybackController = class {
+@@ -1842,7 +1921,7 @@ var PlaybackController = class {
  					error: null
  				});
  			} catch {
@@ -234,7 +265,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  				this.publish({
  					sessionId,
  					messageId,
-@@ -1852,7 +1900,7 @@ var PlaybackController = class {
+@@ -1852,7 +1931,7 @@ var PlaybackController = class {
  				});
  			}
  		} catch (error) {
@@ -243,7 +274,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  			if (!audioCreated && fallback !== void 0) {
  				this.request = null;
  				this.publish(this.emptyView());
-@@ -1932,7 +1980,10 @@ function useSettingsSnapshot(scope) {
+@@ -1932,7 +2011,10 @@ function useSettingsSnapshot(scope) {
  function messageText(legacy, messageId) {
  	for (const node of legacy.nodes) {
  		if (node.kind !== "assistant" || node.messageId !== messageId) continue;
@@ -255,7 +286,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  	}
  	return "";
  }
-@@ -1940,10 +1991,37 @@ function messageTime(legacy, messageId) {
+@@ -1940,10 +2022,37 @@ function messageTime(legacy, messageId) {
  	for (const node of legacy.nodes) if (node.kind === "assistant" && node.messageId === messageId) return node.time;
  	return null;
  }
@@ -294,7 +325,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  	}
  	return null;
  }
-@@ -1997,6 +2075,8 @@ function useApiKeySupported(active) {
+@@ -1997,6 +2106,8 @@ function useApiKeySupported(active) {
  	return supported;
  }
  function scopedLiveText(value, scope, limiter, final = false) {
@@ -303,7 +334,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  	if (resolveTtsReadScope(scope, true) === "full") return value;
  	const plain = (0, __deepseek_ai_dsh_client_ui_primitives.extractMarkdownPlainText)(prepareTtsText(value)).trim();
  	const scoped = limiter.limit(plain, final);
-@@ -6842,6 +6922,138 @@ function installTaskSoundWatcher(ctx, controller, getSettings) {
+@@ -6842,6 +6953,138 @@ function installTaskSoundWatcher(ctx, controller, getSettings) {
  	};
  }
  
@@ -442,7 +473,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  //#endregion
  //#region src/client/style/action.css?raw
  var action_default = "/*\r\n * Read-aloud action button in the assistant message toolbar.\r\n */\r\n\r\n.xmimo-tts-action {\r\n  width: calc(28px + var(--dsh-content-font-delta, 0px));\r\n  height: calc(28px + var(--dsh-content-font-delta, 0px));\r\n  border-radius: var(--dsw-radius-sm);\r\n  color: var(--dsw-alias-label-tertiary);\r\n  cursor: pointer;\r\n  background: transparent;\r\n  border: none;\r\n  justify-content: center;\r\n  align-items: center;\r\n  padding: 6px;\r\n  display: inline-flex;\r\n}\r\n\r\n.xmimo-tts-action:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover) !important;\r\n  color: var(--dsw-alias-label-secondary);\r\n}\r\n\r\n.xmimo-tts-action:disabled {\r\n  cursor: default;\r\n  opacity: 0.45;\r\n}\r\n\r\n.xmimo-tts-spin {\r\n  animation: xmimo-spin 1s linear infinite;\r\n}\r\n\r\n@keyframes xmimo-spin {\r\n  to {\r\n    transform: rotate(360deg);\r\n  }\r\n}\r\n";
-@@ -6945,7 +7157,8 @@ const inject = [
+@@ -6945,7 +7188,8 @@ const inject = [
  	"locale",
  	"remote",
  	"configForms",
@@ -452,7 +483,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  ];
  function formatStartupError(error) {
  	return error instanceof Error ? error.message : String(error);
-@@ -7015,6 +7228,7 @@ function apply(ctx) {
+@@ -7015,6 +7259,7 @@ function apply(ctx) {
  	playback.setBeforePlayback(stopOptionalPcm);
  	live.setStateChangeListener((sessionId, messageId, status) => playback.updateLivePlayback(sessionId, messageId, status, "live"));
  	local.setStateChangeListener((sessionId, messageId, status, error) => playback.updateLivePlayback(sessionId, messageId, status, "system", error));
@@ -461,10 +492,10 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..4503ed1cf483d21e3a61e393c92e2d67
  		const volume = resolveTtsSettings(scope.getSnapshot().value).voiceVolume;
  		live.setVolume(volume);
 diff --git a/lib/shared-DQIrhcy-.js b/lib/shared-DQIrhcy-.js
-index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..7c2ccbcd6a90718c1181d6f01f8b05dcb6976554 100644
+index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..d6d27bb8e1f3d3dab615967fd821f74da7f0eb86 100644
 --- a/lib/shared-DQIrhcy-.js
 +++ b/lib/shared-DQIrhcy-.js
-@@ -323,11 +323,21 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
+@@ -323,11 +323,52 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
  const MARKDOWN_BLOCKQUOTE_RE = /(^|\n)\s*>\s?/g;
  const MARKDOWN_INLINE_FORMAT_RE = /`+|[*_~]{1,3}/g;
  const MARKDOWN_TABLE_SEP_RE = /[|]/g;
@@ -478,16 +509,47 @@ index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..7c2ccbcd6a90718c1181d6f01f8b05dc
 +	const rest = withoutBlocks.slice(open);
 +	return MARKDOWN_STYLE_CLOSE_RE.test(rest) ? withoutBlocks : withoutBlocks.slice(0, open);
 +}
++function stripTtsCards(value) {
++	if (typeof value !== "string" || value.indexOf("vcp-root") < 0) return value;
++	const openRe = /<div\s+id=["']vcp-root["'][^>]*>/i;
++	const kept = [];
++	let cursor = 0;
++	while (cursor < value.length) {
++		const openMatch = openRe.exec(value.slice(cursor));
++		if (openMatch === null) break;
++		const openAt = cursor + openMatch.index;
++		const tagRe = /<div\b[^>]*>|<\/div\s*>/gi;
++		tagRe.lastIndex = openAt;
++		let depth = 0;
++		let match;
++		let end = -1;
++		while ((match = tagRe.exec(value)) !== null) {
++			if (match[0][1] === "/") {
++				depth -= 1;
++				if (depth === 0) { end = tagRe.lastIndex; break; }
++			} else {
++				depth += 1;
++			}
++		}
++		if (end < 0) break;
++		kept.push(value.slice(cursor, openAt));
++		cursor = end;
++	}
++	if (kept.length === 0) return value;
++	kept.push(value.slice(cursor));
++	const joined = kept.join(" ");
++	return joined.trim().length === 0 ? value : joined;
++}
  function removeTtsPaths(value) {
  	return value.replace(TTS_WINDOWS_PATH_PATTERN, " ").replace(TTS_RELATIVE_PATH_PATTERN, " ").replace(TTS_PROJECT_PATH_PATTERN, " ").replace(TTS_UNIX_PATH_PATTERN, " ");
  }
  function removeTtsMarkup(value) {
 -	let text = value.replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
-+	let text = stripTtsStyleBlocks(value).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
++	let text = stripTtsCards(stripTtsStyleBlocks(value)).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
  	text = text.replace(TTS_URL_PATTERN, " ");
  	return removeTtsPaths(text);
  }
-@@ -491,7 +501,16 @@ function appendTtsSmartTruncationOutro(fullText, spokenText, random = Math.rando
+@@ -491,7 +532,16 @@ function appendTtsSmartTruncationOutro(fullText, spokenText, random = Math.rando
  	return `${trimmed}${TTS_OUTRO_PAUSE_END.test(trimmed) ? "" : "。"}${TTS_SMART_TRUNCATION_OUTROS[index]}`;
  }
  /** Apply the configured playback range and Smart automatic closing cue to a completed reply. */

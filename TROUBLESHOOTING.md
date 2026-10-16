@@ -2,9 +2,9 @@
 
 > **用途**：换新设备（或新 profile）装这套朗读维护层时，照着这份记录走，免得把已经踩过的坑再踩一遍。
 > 每条按 **症状 → 原因 → 解法 → 验证** 写，症状照抄当时的实际现象。只写有据可查的（本仓源码与注释、`README.md`、实际 profile 核对结果、记忆库条目），不确定的标「（待核）」。
-> 版本基准：`dsh-maid-tts-fix` **0.6.3** / 上游 `dsh-xiaomi-tts` **3.0.8** / 渲染侧 `dsh-maid-vcp` **0.6.14**（v6.42 注入 + 补丁器 v10.3）。
+> 版本基准：`dsh-maid-tts-fix` **0.6.5** / 上游 `dsh-xiaomi-tts` **3.0.8** / 渲染侧 `dsh-maid-vcp` **0.6.14**（v6.42 注入 + 补丁器 v10.3）。
 >
-> 最后更新 **2026-10-16**
+> 最后更新 **2026-10-17**
 
 ---
 
@@ -142,6 +142,15 @@
 - **发布注记**：本版号一度错标 0.6.6——v0.6.4/v0.6.5 是公司电脑**误传**的分叉标签（不在 main 线上，已删），空出的号段应直接复用；跳号反而制造「又升两版」的假象。改号提交 `7ff4545` 拉齐。
 - **验证**：redo 全绿（node --check 过、patch-commit 落盘、verify 三项：登记 / hash / 落盘）；安装件 `lib/client.js` 里 `scopedLiveText` 头两行已是标记提取；最后一层是耳朵验收——重启 DSH、开自动播报，只应念标记那句。
 
+### 2.10 没写标记时，念的是卡片上的字
+
+- **症状**：老大实测报障（2026-10-16 深夜）：「现在朗读又开始读卡片了」。上一条回复是纯卡片（`<div id="vcp-root">` 装整段汇报），耳朵里念出来的是卡片里的可见文字——标题、"JASNA · 关机问答"、时间线那些行。
+- **原因**：**不是插件退化，是写回复的人漏了标记**。`readScope=first-segment` 下没标记就走兜底"念首段（≤240 字）"，而纯卡片回复的**首段恰好是卡片可见文字**（卡片本体在前、正文在后）。CSS 早被 0.6.0 剥干净了，所以念出来的不是样式垃圾，是**卡片排版好的那些短句**——比念 CSS 更隐蔽，听着像"它在读屏幕"。排查三路全干净：补丁符号全在、CSS 剥离探针全过、首段端到端 9 过 0 挂；复现脚本 `_probe/tts-card-regress.mjs` 拿那条真实回复原文喂真链路——不加标记念出卡片文字，加上标记立刻只念那一句。
+- **解法**（0.6.5）：加 `stripTtsCards(value)`，挂在 `removeTtsMarkup` 入口、`stripTtsStyleBlocks` 之前（`style-wire` 那一处），所有朗读路径都过这里，一处接线全覆盖。**不能用非贪婪正则**——卡片里有嵌套 `div`，正则会从第一个 `</div>` 截断。算法：找 `<div id="vcp-root" …>` 起点 → 用 `/ <div\b[^>]*>|<\/div\s*>/gi` 从该点起按 div 配平找块尾 → 剥掉**所有** vcp-root 块 → 拼回。
+- **三条边界（都写进代码注释了）**：① **剥完 trim 为空则原样返回**——纯卡片消息退回老行为，绝不念成空；② **未闭合卡片（流式中间帧）不动**——宁可多念半句，也不能吞掉卡片之后的正文；③ 卡片在末尾时正文完整保留（首版原型把"正文在前+卡片在后"的正文切掉了，改成剥所有卡块而非只剥开头那块）。
+- **验证**：原型探针 `_probe/tts-card-strip-probe.mjs` 8/8；端到端 `_probe/tts-firstseg-e2e.mjs` 扩到 12 条（新增 ⑩ 纯卡片不许念成空、⑪ 卡片在末尾正文保留、⑫ 嵌套 div 只剥卡片本身）**12 过 0 挂**；redo 重放 32 条编辑、node --check 过、落盘核对两文件均"已应用"。
+- **元教训**：这道保险是**给"人忘写标记"兜底的**，不是替代标记。标记仍要每条都写——卡片剥离只是让"忘了写"不再念出一串界面文字。
+
 ---
 
 ## 三、音色与配置落点（voiceDesignPrompt、profile 配置、面板值优先）
@@ -223,7 +232,7 @@
 | --- | --- | --- |
 | 本仓 | `D:\DeepSeek Harness\Works\dsh-maid-tts-fix` | 远端 `Valorine97417/dsh-maid-tts-fix` |
 | 补丁正本 | `dsh-maid-tts-fix/patches/dsh-xiaomi-tts@3.0.8.patch` | 23587 字节 / sha256 `4f89e11a6e4e3f31f8b1c885412ff0ca72903dcc863492b1610d044aba5606b9` |
-| 意图层 | `dsh-maid-tts-fix/lib/edits.js` | `EDITS` 19 条编辑（展开到两文件为 31 条重放编辑），锚点 + `expect`；全有或全无、幂等 |
+| 意图层 | `dsh-maid-tts-fix/lib/edits.js` | `EDITS` 20 条编辑（展开到两文件为 32 条重放编辑），锚点 + `expect`；全有或全无、幂等 |
 | 体检判据 | `dsh-maid-tts-fix/lib/selfcheck.js` | 12 条 `APPLIED_MARKERS`，按文件聚合 |
 | 命令行 | `dsh-maid-tts-fix/scripts/patch.mjs` | `list / install / verify / remove / upgrade / redo` |
 | 补丁备份 | `dsh-maid-tts-fix/.patch-backups/` | 本机 profile 的补丁与 lock/workspace 快照，**不进版本控制** |
