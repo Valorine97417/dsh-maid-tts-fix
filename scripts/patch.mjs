@@ -338,6 +338,62 @@ function cmdRemove() {
  * patch-commit → 清掉旧版本的补丁文件与登记 → verify。
  */
 function cmdUpgrade() {
+  return runRebuild(pickUpgradeVersion)
+}
+
+/**
+ * upgrade 的版本解析策略：目标版本就是已装版本。读不到已装版本就报错
+ * （上游还没装或装坏了，盲目退回 patch.version 会把补丁钉回旧版）；
+ * 补丁已钉住该版本时无事可做。
+ *
+ * @param {object} patch
+ * @param {string | undefined} installed
+ * @returns {{ version: string } | { skip: string } | { fail: string }}
+ */
+function pickUpgradeVersion(patch, installed) {
+  if (installed === undefined) return { fail: `✗ ${patch.packageName}：读不到已装版本，装了吗？` }
+  if (installed === patch.version) return { skip: `· ${patch.packageName}：补丁已是 ${installed}，无需重做。` }
+  return { version: installed }
+}
+
+/**
+ * 按当前 `lib/edits.js` 重新生成补丁 —— **版本不变**也要重做。
+ *
+ * 和 `upgrade` 的区别：upgrade 是"上游发新版了，把补丁跟上去"，版本必然变；
+ * redo 是"补丁意图改了（往 edits.js 里加了新编辑），把同一个版本的补丁重出
+ * 一份"。两者落盘流程一模一样，只差在要不要检查版本变化。
+ *
+ * 为什么必须走 pnpm patch 重出、而不是手工编辑 `.patch`：`.patch` 是产物，
+ * `edits.js` 是意图。手改产物的话，下次 upgrade 一重放，手工那部分就没了。
+ */
+function cmdRedo() {
+  return runRebuild(pickRedoVersion)
+}
+
+/**
+ * redo 的版本解析策略：版本不变也要重出——重出的是补丁意图，不是版本。
+ * 读不到已装版本就退回补丁钉住的版本：staging 是从 registry 取的原始树，
+ * 重放不依赖本地已装的那份。
+ *
+ * @param {object} patch
+ * @param {string | undefined} installed
+ * @returns {{ version: string } | { skip: string } | { fail: string }}
+ */
+function pickRedoVersion(patch, installed) {
+  return { version: installed ?? patch.version }
+}
+
+/**
+ * upgrade 与 redo 共用的重做流程（此前两个命令逐行复制，这里合并成一份）：
+ * 逐补丁解析目标版本 → redoOne →（非 dry）cmdVerify。
+ * 前置检查、--dry-run、--to、失败聚合与退出码都只有这一份实现。
+ *
+ * @param {(patch: object, installed: string | undefined) =>
+ *   { version: string } | { skip: string } | { fail: string }} pickVersion
+ *   版本解析策略：决定每个补丁重做成哪个版本、跳过（skip）还是报错（fail）。
+ * @returns {number} 退出码。
+ */
+function runRebuild(pickVersion) {
   const patches = listPatches(PATCH_DIR)
   if (patches.length === 0) {
     console.error('patches/ 下没有补丁文件，不知道要重做哪个。')
@@ -353,54 +409,17 @@ function cmdUpgrade() {
   let failedAny = false
   for (const patch of patches) {
     const installed = target ?? installedVersion(path.join(profile, 'node_modules', patch.packageName))
-    if (installed === undefined) {
-      console.error(`✗ ${patch.packageName}：读不到已装版本，装了吗？`)
+    const step = pickVersion(patch, installed)
+    if (step.fail !== undefined) {
+      console.error(step.fail)
       failedAny = true
       continue
     }
-    if (installed === patch.version) {
-      console.log(`· ${patch.packageName}：补丁已是 ${installed}，无需重做。`)
+    if (step.skip !== undefined) {
+      console.log(step.skip)
       continue
     }
-    if (!redoOne(patch, installed, dry)) failedAny = true
-  }
-
-  if (dry) {
-    console.log('\n（--dry-run，未写盘）')
-    return 0
-  }
-  const verify = cmdVerify()
-  if (failedAny) console.error('\n有步骤失败，见上。')
-  return failedAny ? 1 : verify
-}
-
-/**
- * 按当前 `lib/edits.js` 重新生成补丁 —— **版本不变**也要重做。
- *
- * 和 `upgrade` 的区别：upgrade 是"上游发新版了，把补丁跟上去"，版本必然变；
- * redo 是"补丁意图改了（往 edits.js 里加了新编辑），把同一个版本的补丁重出
- * 一份"。两者落盘流程一模一样，只差在要不要检查版本变化。
- *
- * 为什么必须走 pnpm patch 重出、而不是手工编辑 `.patch`：`.patch` 是产物，
- * `edits.js` 是意图。手改产物的话，下次 upgrade 一重放，手工那部分就没了。
- */
-function cmdRedo() {
-  const patches = listPatches(PATCH_DIR)
-  if (patches.length === 0) {
-    console.error('patches/ 下没有补丁文件，不知道要重做哪个。')
-    return 1
-  }
-  if (!fs.existsSync(workspaceFile)) {
-    console.error(`找不到 ${workspaceFile}，profile 路径对吗？（用 --profile 指定）`)
-    return 1
-  }
-  const dry = has('--dry-run')
-  const target = argValue('--to')
-
-  let failedAny = false
-  for (const patch of patches) {
-    const version = target ?? installedVersion(path.join(profile, 'node_modules', patch.packageName)) ?? patch.version
-    if (!redoOne(patch, version, dry)) failedAny = true
+    if (!redoOne(patch, step.version, dry)) failedAny = true
   }
 
   if (dry) {
