@@ -2,9 +2,9 @@
 
 > **用途**：换新设备（或新 profile）装这套朗读维护层时，照着这份记录走，免得把已经踩过的坑再踩一遍。
 > 每条按 **症状 → 原因 → 解法 → 验证** 写，症状照抄当时的实际现象。只写有据可查的（本仓源码与注释、`README.md`、实际 profile 核对结果、记忆库条目），不确定的标「（待核）」。
-> 版本基准：`dsh-maid-tts-fix` **0.6.5** / 上游 `dsh-xiaomi-tts` **3.0.8** / 渲染侧 `dsh-maid-vcp` **0.6.14**（v6.42 注入 + 补丁器 v10.3）。
+> 版本基准：`dsh-maid-tts-fix` **0.6.5** / 上游 `dsh-xiaomi-tts` **3.0.9** / 渲染侧 `dsh-maid-vcp` **0.6.14**（v6.42 注入 + 补丁器 v10.3）。
 >
-> 最后更新 **2026-10-17**
+> 最后更新 **2026-10-18**
 
 ---
 
@@ -12,7 +12,7 @@
 
 **依赖**：本插件是 `dsh-xiaomi-tts` 的**维护层**，不是替代品。它自己只做两件事——携带补丁正本（`patches/`）、启动时体检补丁是否还活着（`index.js` → `lib/selfcheck.js`）；朗读能力全来自上游。
 
-**顺序**：上游先装、补丁后打。① 装 `dsh-xiaomi-tts@3.0.8` → ② 装 `dsh-maid-tts-fix@0.6.3` → ③ 在本包目录跑 `node scripts/patch.mjs install`（复制补丁进 profile → 登记 → `pnpm install` → 核对）→ ④ 装渲染侧 `dsh-maid-vcp`（≥0.6.14）并打注入补丁 `node patch/install-all.cjs` → ⑤ **重启 DSH**
+**顺序**：上游先装、补丁后打。① 装 `dsh-xiaomi-tts@3.0.9` → ② 装 `dsh-maid-tts-fix@0.6.5` → ③ 在本包目录跑 `node scripts/patch.mjs install`（复制补丁进 profile → 登记 → `pnpm install` → 核对）→ ④ 装渲染侧 `dsh-maid-vcp`（≥0.6.14）并打注入补丁 `node patch/install-all.cjs` → ⑤ **重启 DSH**
 
 本插件在 profile 的 `cordis.patch.yml` 里只插一行（`id: tts-fix`），`inject = []`——没有客户端半边、不注册路由、不依赖 settings（`cordis.patch.yml:1-6`、`index.js:25-27`）。它**不影响启动顺序**；价值全在"没人想起来的时候它也在体检"。
 
@@ -20,29 +20,29 @@
 
 - **症状**：朗读突然又开始念 CSS，没有报错、没有提示。
 - **原因**：2026-10-14 第一版是手改进 `node_modules/dsh-xiaomi-tts/lib/` 的。当晚装另一个插件触发 pnpm 整棵重铺，补丁连同 `*.bak-*` 备份一起被**静默抹掉**，直到点朗读才听见。
-- **解法**：一律走 pnpm patch。补丁正本 `patches/dsh-xiaomi-tts@3.0.8.patch`，登记进 profile 的 `pnpm-workspace.yaml` → `patchedDependencies`，hash 落进 `pnpm-lock.yaml` → `patch_hash`（**就是 `.patch` 的 sha256**），此后任何 install / 重铺都自动重打。
+- **解法**：一律走 pnpm patch。补丁正本 `patches/dsh-xiaomi-tts@3.0.9.patch`，登记进 profile 的 `pnpm-workspace.yaml` → `patchedDependencies`，hash 落进 `pnpm-lock.yaml` → `patch_hash`（**就是 `.patch` 的 sha256**），此后任何 install / 重铺都自动重打。
 - **验证**：`node scripts/patch.mjs verify` 四项全 ✓。**记住：改 node_modules 等于没改。**
 
 ### 1.2 `pnpm install` 会假装成功（整包目录被外部删掉）
 
 - **症状**：`pnpm install` 回一句 `Already up to date`，补丁文件、登记、lockfile 全对，包里却一个字没有，又开始念 CSS。
 - **原因**：外面 `rm -rf node_modules/dsh-xiaomi-tts` 后，pnpm 账本仍认为"已装好"。实测（2026-10-15）：**连 `--force`、删 `node_modules/.modules.yaml` 都不管用**。
-- **解法**：让 pnpm 重新解析这个包——`pnpm add dsh-xiaomi-tts@3.0.8`（同版本重装不改 `dependencies`，只补回目录）。`install` 子命令已内置这个回退（`scripts/patch.mjs:237-242`）。
+- **解法**：让 pnpm 重新解析这个包——`pnpm add dsh-xiaomi-tts@3.0.9`（同版本重装不改 `dependencies`，只补回目录）。`install` 子命令已内置这个回退（`scripts/patch.mjs:237-242`）。
 - **验证**：verify 报 `missing-file` 时按提示重跑 install；重跑后 `lib/client.js` 里出现 `stripTtsStyleBlocks`。
 
 ### 1.3 上游升版后 `pnpm install` 直接中止
 
 - **症状**：`ERR_PNPM_UNUSED_PATCH`，整个 install 失败。
-- **原因**：`patchedDependencies` 的键是**精确版本**（`dsh-xiaomi-tts@3.0.8`）。上游一发新版旧键就悬空，pnpm 报错中止（实测 2026-10-15）。这其实是好事（不假装成功），但不重做补丁就升不动。
+- **原因**：`patchedDependencies` 的键是**精确版本**（`dsh-xiaomi-tts@3.0.9`）。上游一发新版旧键就悬空，pnpm 报错中止（实测 2026-10-15）。这其实是好事（不假装成功），但不重做补丁就升不动。
 - **解法**：`node scripts/patch.mjs upgrade`——`pnpm patch` 解出干净上游树 → 按 `lib/edits.js` 重放 → `node --check` → `patch-commit` → 清掉旧版本补丁与登记 → verify。
 - **验证**：verify 四项过，目标版本变新版本号。
 
 ### 1.4 补丁意图改了但版本没变：跑 `redo`，不是 `upgrade`
 
-- **症状**：往 `lib/edits.js` 加了新编辑（例如加 `spoken-override`），跑 `upgrade` 被"补丁已是 3.0.8，无需重做"挡回来。
+- **症状**：往 `lib/edits.js` 加了新编辑（例如加 `spoken-override`），跑 `upgrade` 被"补丁已是 3.0.9，无需重做"挡回来。
 - **原因**：`upgrade` 只在版本变化时干活。
 - **解法**：`node scripts/patch.mjs redo`——流程相同，只差**不检查版本变化**。
-- **验证**：`node scripts/patch.mjs list` 看 sha256 变了、字节数变大。本仓 sha256 变化史：4120B → 6144B（`spoken-override`）→ 6921B（`spoken-override-entry`）→ 14883B（切会话不打断）→ 21868B（跨会话自动播报）→ 23356B（反思轮初版）→ 23082B（判据修正）→ 23463B（首轮反思补判据）→ **23587B / `4f89e11a6e4e3f31f8b1c885412ff0ca72903dcc863492b1610d044aba5606b9`**（标记收尾容错）。
+- **验证**：`node scripts/patch.mjs list` 看 sha256 变了、字节数变大。本仓 sha256 变化史：4120B → 6144B（`spoken-override`）→ 6921B（`spoken-override-entry`）→ 14883B（切会话不打断）→ 21868B（跨会话自动播报）→ 23356B（反思轮初版）→ 23082B（判据修正）→ 23463B（首轮反思补判据）→ 23587B（标记收尾容错）→ **26307B / `7bacff7947105f7e21a25a8e972a7837c687256442b1e2259091657e40594e5a`**（3.0.9 换 rolldown 打包器，意图按版本分家）。
 
 ### 1.5 `redo` 的双重陷阱：改了 edits.js 也可能等于白改
 
@@ -63,14 +63,52 @@
 - **症状**：verify 报「lockfile 的 hash 与补丁正本不符」，但**没人改过补丁**。
 - **原因**：`.patch` 的 sha256 就是 lockfile 里的 `patch_hash`，任何换行转换都会让它对不上——不是补丁坏了，是 git 动了字节。
 - **解法**：本仓 `.gitattributes` 已写死 `*.patch -text`，其余文本统一 LF（`* text=auto eol=lf`）。**克隆后别用会改行尾的编辑器保存 `.patch`。**
-- **验证**：`sha256sum patches/dsh-xiaomi-tts@3.0.8.patch` = `4f89e11a…5606b9`（23587 字节）。
+- **验证**：`sha256sum patches/dsh-xiaomi-tts@3.0.9.patch` = `7bacff79…4e5a`（26307 字节）。
 
 ### 1.8 启动自检说补丁有问题，怎么办
 
 - **症状**：DSH 启动日志出现 `[tts-fix] …` 的 warn。
 - **原因**：三项独立失效点之一掉了——① 登记（`pnpm-workspace.yaml` 的 `patchedDependencies`）；② hash（lockfile 的 `patch_hash` 是否 = `.patch` 的 sha256）；③ 落盘（上游那两处文件是否含补丁特征）。
 - **解法**：按 warn 附的命令修（多数是 `node scripts/patch.mjs install`，改完重启 DSH）。自检**不修、不拦、不抛**——体检器没资格让应用起不来。
-- **验证**：修完重启，日志应出现 `补丁齐备：dsh-xiaomi-tts@3.0.8`。判据是 `lib/selfcheck.js` 的 **12 条 `APPLIED_MARKERS`**（跨 client.js / shared-DQIrhcy-.js 两份文件），**按文件聚合**报告；**改补丁时必须同步改这里**，否则体检开始说谎。特例：只有 `lib/client.js` 有 `messageText`，所以 `spoken-override-entry` 那条标记只挂在客户端那份文件上。宿主完全没装 `dsh-xiaomi-tts` 时自检仍然会跑，若 profile 里也没登记，它会报「未登记到 patchedDependencies」，不是沉默通过。
+- **验证**：修完重启，日志应出现 `补丁齐备：dsh-xiaomi-tts@3.0.9`。判据是 `lib/selfcheck.js` 的 **16 条 `APPLIED_MARKERS`**（按逻辑名 `@client` 12 条 / `@text` 4 条，实际落到 `lib/client.js` 与那支带哈希的文本 chunk 上），**按文件聚合**报告；**改补丁时必须同步改这里**，否则体检开始说谎。特例：只有 `lib/client.js` 有 `messageText`，所以 `spoken-override-entry` 那条标记只挂在客户端那份文件上。宿主完全没装 `dsh-xiaomi-tts` 时自检仍然会跑，若 profile 里也没登记，它会报「未登记到 patchedDependencies」，不是沉默通过。
+
+### 1.9 升级不是一步：`pnpm patch` 只认**已安装**的版本
+
+- **症状**：`node scripts/patch.mjs upgrade --to 3.0.9` 报 `[ERR_PNPM_PATCH_VERSION_NOT_FOUND] Can not find dsh-xiaomi-tts@3.0.9 in project … you can specify currently installed version: 3.0.8`。
+- **原因**：`pnpm patch <包>@<新版本>` 要求那个版本**已经装好**在 profile 里。直接对未安装的新版本做 patch，pnpm 找不到落地目录。**先升上游，再打补丁**——顺序反了就走不动。
+- **解法（2026-10-18 实测的正确三步）**：
+  1. **先摘掉旧版本的 `patchedDependencies` 登记**。否则升版本时那条 `dsh-xiaomi-tts@3.0.8` 键悬空，pnpm 报 `ERR_PNPM_UNUSED_PATCH` 中止整个 install。
+  2. 改 profile 的 `package.json` 依赖（`dsh-xiaomi-tts: 3.0.8 → 3.0.9`），跑 `pnpm install --config.minimumReleaseAge=0`，装到**干净的上游 3.0.9**。
+  3. 回头跑 `node scripts/patch.mjs upgrade --to 3.0.9` 生成新补丁。
+- **验证**：`upgrade` 打印「重放 N 条编辑 → node --check 通过」；随后 `verify` 四项全 ✓。
+
+### 1.10 `patch-commit` 也会被供应链门禁挡下
+
+- **症状**：`upgrade` 走到最后一步报 `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`：`dsh-xiaomi-tts@3.0.9 was published at … within the minimumReleaseAge cutoff`。新发版几小时内必然踩到。
+- **原因**：`pnpm patch-commit` 内部会**重新校验 lockfile 的供应链门禁**——不只是 `install` 那一步会。
+- **解法**：`patch-commit` 这一步也要带 `retryPolicy`（脚本已改，`scripts/patch.mjs:548`）。只对 `install` 加了重试是不够的——**凡是会让 pnpm 解析 lockfile 的子命令都得包上**。
+- **验证**：重试输出里出现 `带 --config.minimumReleaseAge=0 重试一次`，随后 `Lockfile passes supply-chain policies` 并写出 `.patch`。
+
+### 1.11 「落盘：文件缺失」但文件明明在——裸文件名漏了 `lib/` 前缀
+
+- **症状**：`verify` 报 `✗ 落盘：text-B7NACAYZ.js 文件缺失`，可 `ls lib/text-B7NACAYZ.js` 明明存在，`client.js` 那项却是 ✓。
+- **原因**：`resolveMarkerFiles()` 按内容认文本那支文件时，返回的是 `fs.readdirSync(libDir)` 给出的**裸文件名**（`text-B7NACAYZ.js`），没补 `lib/` 前缀；调用方拿它 `path.join(packageRoot, file)` 就指到了包根。3.0.8 时代走的是「旧名优先」分支（那个常量自带 `lib/`），所以一直没暴露。
+- **解法**：按内容找到时补前缀 `` `lib/${found}` ``（`lib/selfcheck.js:97`）。**教训**：凡是「先 readdir 拿名字、再拼进路径」的地方，都要问一句「这名字是相对谁的」。
+- **验证**：`verify` 变成 `✓ 落盘：lib/text-B7NACAYZ.js 已应用`。
+
+### 1.12 意图必须按上游版本分家
+
+- **症状**：升级到 3.0.9 后锚点整批失配（3.0.8 的锚点一条也命中不了）。
+- **原因**：3.0.9 换了打包器（rolldown），产物形态不是同一棵树——文本工具被拆进**带构建哈希**的独立 chunk（`shared-DQIrhcy-.js` 消失 → `text-B7NACAYZ.js`），流式旁路从 `scopedLiveText` 换成 `applyTtsLivePlaybackScope`，`PlaybackController` 两个方法多了一行。锚点是逐字的，跨版本必然全灭。
+- **解法**：`lib/edits.js` 改成**分发器**，按包自身 `package.json` 的版本挑 `lib/edits-v308.js` / `lib/edits-v309.js`；未登记版本**回落最新模块**（宁可 loudly 失败，也不拿语义已不匹配的锚点去猜）。同理 `APPLIED_MARKERS` 用逻辑名 `@client` / `@text`，由 `resolveMarkerFiles()` 按内容认文件，**不写死带哈希的文件名**。
+- **验证**：`node -e` 查 `knownEditModules()` 应列出两个版本；`planEdits` 对 3.0.9 目录报 33 条重放、对 3.0.8 报 32 条。
+
+### 1.13 `pnpm` 的路径会跟着宿主版本搬家
+
+- **症状**：`upgrade` 报找不到 pnpm，或静默回退到 PATH 上的 `pnpm`——而这台机 PATH 上**没有** pnpm。
+- **原因**：`patch.mjs` 曾把 `D:/DeepSeek Harness/resources/runtime/pnpm/bin/pnpm.cjs` 写死。宿主升级后运行时搬到了 `resources/runtime/primary-runtime/dependencies/pnpm/`，用户目录还有个 `~/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm/`。写死就会在换宿主版本后失联。
+- **解法**：改成**候选清单探测**（`resolveBundledPnpm()`，`scripts/patch.mjs:36-57`），取第一个存在的；都不存在才退回 PATH 的 `pnpm`。**凡是引用宿主自带工具链的地方都别写死单一路径。**
+- **验证**：`node scripts/patch.mjs list` 与 `verify` 均正常，且 install 走的是内置 pnpm（v11.28.5）。
 
 ---
 
@@ -80,7 +118,7 @@
 
 - **症状**：点一次朗读，耳朵里是 `#vcp-rootbox-sizing:border-box;max-width:760px;padding:26px 28px;…`。卡片做得越精致，念出来的垃圾越多。
 - **原因**：上游 `removeTtsMarkup` 剥 HTML 用的是**单行**正则 `MARKDOWN_HTML_TAG_RE = /<[^>\r\n]*>/g`——`[^>\r\n]` 跨不过换行。VCP 卡片的样式写在**多行** `<style>` 块里，`<style>` 与 `</style>` 之间的整段原样留下、被当正文送进合成。
-- **解法**：加三个常量 + `stripTtsStyleBlocks()`：先按**块**删 `<style>`/`<script>` 整段（跨行），再走原来的行内清洗；把新函数**接在 `removeTtsMarkup` 链首**。**两份文件都要改**——`lib/client.js`（浏览器实际跑的那份）与 `lib/shared-DQIrhcy-.js`（宿主/Node 侧）是同一函数的两个副本，漏一个等于没修。流式中间帧也照顾了：`<style>` 已开、`</style>` 未到时从开标签处截断——宁可少念半句也不念 CSS。
+- **解法**：加三个常量 + `stripTtsStyleBlocks()`：先按**块**删 `<style>`/`<script>` 整段（跨行），再走原来的行内清洗；把新函数**接在 `removeTtsMarkup` 链首**。**两处副本都要改**——3.0.8 时代是 `lib/client.js`（浏览器实际跑的那份）与 `lib/shared-DQIrhcy-.js`（宿主/Node 侧）；3.0.9 换成 `lib/client.js` 与一支带构建哈希的文本 chunk。漏一处等于没修（本仓一律用逻辑名 `@client` / `@text` 指代，由内容认文件）。流式中间帧也照顾了：`<style>` 已开、`</style>` 未到时从开标签处截断——宁可少念半句也不念 CSS。
 - **验证**：`_probe/tts-text-probe.mjs` 三场景（完整卡 / 流式未闭合 / 卡+正文），CSS 残留应全为 false。
 
 ### 2.2 写了 `<!--tts:…-->` 标记，点朗读照旧念全文
@@ -231,15 +269,15 @@
 | 项 | 路径 | 说明 |
 | --- | --- | --- |
 | 本仓 | `D:\DeepSeek Harness\Works\dsh-maid-tts-fix` | 远端 `Valorine97417/dsh-maid-tts-fix` |
-| 补丁正本 | `dsh-maid-tts-fix/patches/dsh-xiaomi-tts@3.0.8.patch` | 23587 字节 / sha256 `4f89e11a6e4e3f31f8b1c885412ff0ca72903dcc863492b1610d044aba5606b9` |
-| 意图层 | `dsh-maid-tts-fix/lib/edits.js` | `EDITS` 20 条编辑（展开到两文件为 32 条重放编辑），锚点 + `expect`；全有或全无、幂等 |
-| 体检判据 | `dsh-maid-tts-fix/lib/selfcheck.js` | 12 条 `APPLIED_MARKERS`，按文件聚合 |
-| 命令行 | `dsh-maid-tts-fix/scripts/patch.mjs` | `list / install / verify / remove / upgrade / redo` |
-| 补丁备份 | `dsh-maid-tts-fix/.patch-backups/` | 本机 profile 的补丁与 lock/workspace 快照，**不进版本控制** |
+| 补丁正本 | `dsh-maid-tts-fix/patches/dsh-xiaomi-tts@3.0.9.patch` | 26307 字节 / sha256 `7bacff7947105f7e21a25a8e972a7837c687256442b1e2259091657e40594e5a` |
+| 意图层 | `dsh-maid-tts-fix/lib/edits.js` | **按版本分发的分发器** → `edits-v308.js`（展开 32 条）/ `edits-v309.js`（展开 33 条）；锚点 + `expect`；全有或全无、幂等 |
+| 体检判据 | `dsh-maid-tts-fix/lib/selfcheck.js` | **16 条 `APPLIED_MARKERS`**，逻辑名 `@client`(12) / `@text`(4)，按内容认文件 |
+| 命令行 | `dsh-maid-tts-fix/scripts/patch.mjs` | `list / install / verify / remove / upgrade / redo`；pnpm 走候选路径探测 |
+| 补丁备份 | `dsh-maid-tts-fix/.patch-backups/` | 本机 profile 的补丁与 lock/workspace 快照，**不进版本控制**；升级前留 `pre-309/` |
 | profile 目录 | `C:\Users\<用户>\.dsh\profiles\desktop` | 本机为 `C:\Users\Kayle\…`；启动自检优先读 `DSH_PROFILE_DIR` 环境变量 |
-| 登记 | `…\profiles\desktop\pnpm-workspace.yaml` → `patchedDependencies` | 当前含 `dsh-video-understand@0.5.2`、`dsh-xiaomi-tts@3.0.8` |
+| 登记 | `…\profiles\desktop\pnpm-workspace.yaml` → `patchedDependencies` | 当前含 `dsh-video-understand@0.5.2`、`dsh-xiaomi-tts@3.0.9` |
 | hash | `…\profiles\desktop\pnpm-lock.yaml` → `patch_hash`（第 9 行） | 应与补丁正本 sha256 一致 |
-| 上游落盘 | `…\node_modules\dsh-xiaomi-tts\lib\client.js`、`lib\shared-DQIrhcy-.js` | 两份都必须含 `stripTtsStyleBlocks` |
+| 上游落盘 | `…\node_modules\dsh-xiaomi-tts\lib\client.js`、`lib\text-<hash>.js` | 两份都必须含 `stripTtsStyleBlocks`；文本那支名字带构建哈希，**按内容找** |
 | 音色配置 | `…\profiles\desktop\cordis.patch.yml` 的 `xiaomi-mimo-tts` 段 | `voiceDesignPrompt`(:115) / `voiceDesignCustomPrompt`(:123) / `model`(:112) / `readScope`(:133) / `voiceRate`(:145) |
 | 配置备份 | `…\profiles\desktop\cordis.patch.yml.bak-*` | `bak-tts-c-20261014`（音色定稿前）、`bak-firstseg-20261015-0450`（readScope 改动前）、`bak-rate1-20261014-220042` |
 | 探针 | `D:\DeepSeek Harness\Works\_probe\tts-*` | 见第六章；**在仓库之外** |
@@ -250,14 +288,18 @@
 1. **先问"判据的输入到底存不存在"，再怀疑判据写法。** 0.6.0 实例：锚点、函数名、落盘标记全对，真因是 `legacyContribution` 把 `turn-trigger` 投影丢了。同类坑：`node.data.content` 实际扁平挂顶层、`chat target.getSnapshot()` 首次恒 `undefined`（要先 `subscribe` 预热）。
 2. **修好一处可能引入更糟的一处。** 排查"某功能突然坏了"时，除了问"输入在不在"，还要问"**最近改的那条分支，在别的语境下也会跑到吗**"（v6.41 截断 → v6.42 `lenient`）。
 3. **验落盘，别猜。** `node scripts/patch.mjs verify`（登记 / hash / 落盘）+ 启动日志 `[tts-fix]` 行；判据是 `APPLIED_MARKERS`，不是页面表现。
-4. **探针清单**（`D:\DeepSeek Harness\Works\_probe\`，均在仓库之外）：`tts-text-probe.mjs`（CSS 剥离三场景）｜`tts-spoken-probe.mjs`（标记提取，含多行与写残）｜`tts-spoken-pipeline.mjs`（真实代码三段对照）｜`tts-firstseg-e2e.mjs`（首段兜底 9 场景）｜`tts-mark-audit.mjs`（会话日志标记覆盖率审计）｜`tts-switch-probe.mjs`（切会话 7 组 20 用例）｜`tts-cross-session-probe.mjs`（跨会话播报）｜`tts-fix-replay-test.mjs`（补丁重放逐字节可复现：`git apply -R` 撤成上游原样 → 重放 → 比对）｜`tts-markup-lenient-probe.mjs`（注释剥离宽容分支）｜`tts-pick-gen.mjs` / `tts-acoustic.py`（音色重抽与 F0 统计）。
-5. **断言失败先定性，别急着改补丁。** 见 2.5：`tts-spoken-probe.mjs` 断言④报错实为探针期望值写错——陈旧探针比真缺陷常见。**桩要贴着真实生命周期给**（`releaseCurrentAudio` 那次的教训）。
-6. **别拿老大的屏幕当测试环境。** 验证样本要自己先确认渲染正常，再放进给老大看的回复里；要老大配合实测时，明确说清"这条注释会暂时显形，属于验证样本"。
-7. **机制型功能上线后必须主动讲清触发条件**（"不写标记就念首段"）。否则用户把"没触发"当故障，还要多花几轮去猜、去证。
-8. **写完回复扫一眼开头的 `<!--tts:` 是否以 `-->` 收尾、是否裸写独占一行。** 这是最便宜的自检，代价却是老大看不见回复。
-9. **别手改 `node_modules`；别手工编辑 `.patch`**（`.patch` 是产物、`edits.js` 是意图——手改产物下次 `upgrade` 一重放就没了）。
-10. **锚点三坑**（`lib/edits.js` 顶部注释）：① 锚点写成带 `\t` 前缀而源码顶格 → 命中 0 次；② 替换串自带 `\t` 而源码行已有缩进 → 叠成两层；③ **上游那两个文件是 CRLF 行尾**，锚点写 `\n` → 逐字全不匹配而"肉眼明明一样"。现在的写法：锚点一律用 `\n`，由 `normalizeEol()` 按目标文件行尾折算。
-11. **补丁随包分发**（`patches/` 在 `package.json` 的 `files` 白名单里）。上游哪天自己修好了，`verify` 会报「落盘：未应用」而不是假装成功——那正是该退休的信号；长期无提交则转整包接管（形态参照 `dsh-maid-preset` 内联 `meow-memory` 的做法）。
+4. **探针清单**（`D:\DeepSeek Harness\Works\_probe\`，均在仓库之外）：`tts-309-landed-check.mjs`（**对落盘后的真实产物跑端到端 8 场景**——见下条）｜`tts-text-probe.mjs`（CSS 剥离三场景）｜`tts-spoken-probe.mjs`（标记提取，含多行与写残）｜`tts-spoken-pipeline.mjs`（真实代码三段对照）｜`tts-firstseg-e2e.mjs`（首段兜底 9 场景）｜`tts-mark-audit.mjs`（会话日志标记覆盖率审计）｜`tts-switch-probe.mjs`（切会话 7 组 20 用例）｜`tts-cross-session-probe.mjs`（跨会话播报）｜`tts-fix-replay-test.mjs`（补丁重放逐字节可复现：`git apply -R` 撤成上游原样 → 重放 → 比对）｜`tts-markup-lenient-probe.mjs`（注释剥离宽容分支）｜`tts-pick-gen.mjs` / `tts-acoustic.py`（音色重抽与 F0 统计）。
+5. **`verify` 绿了不等于功能对——再跑一遍落盘产物。** `tts-309-landed-check.mjs` 从 `node_modules/dsh-xiaomi-tts/lib/` 里**抠出真正会上线的那份字节**跑 8 个场景（CSS 剥离、纯卡片、嵌套 div、流式中间帧、标记提取、写残标记、普通文本、围栏代码）。手法：把 `lib/` 拷到临时目录，在文本 chunk 末尾**追加一行 `export {...}`** 再 `import()`——让 Node 自己解析它原本的 `import` 链。**踩过的两条弯路**：① 按内容认文件时必须**排除 `client.js`**（两份都含 `removeTtsMarkup`，字母序在前会认错）；② 别用 `vm` 抠函数体逐层补依赖（`removeTtsMarkup` → `removeFencedCode` → `findFencedCodeRegions` → `MARKDOWN_CODE_BLOCK_RE` …补不完，**别重造模块系统**）。
+6. **断言失败先定性，别急着改补丁。** 见 2.5：`tts-spoken-probe.mjs` 断言④报错实为探针期望值写错——陈旧探针比真缺陷常见。**桩要贴着真实生命周期给**（`releaseCurrentAudio` 那次的教训）。
+7. **别拿老大的屏幕当测试环境。** 验证样本要自己先确认渲染正常，再放进给老大看的回复里；要老大配合实测时，明确说清"这条注释会暂时显形，属于验证样本"。
+8. **机制型功能上线后必须主动讲清触发条件**（"不写标记就念首段"）。否则用户把"没触发"当故障，还要多花几轮去猜、去证。
+9. **写完回复扫一眼开头的 `<!--tts:` 是否以 `-->` 收尾、是否裸写独占一行。** 这是最便宜的自检，代价却是老大看不见回复。
+10. **别手改 `node_modules`；别手工编辑 `.patch`**（`.patch` 是产物、`edits.js` 是意图——手改产物下次 `upgrade` 一重放就没了）。
+11. **锚点三坑**（`lib/edits.js` 顶部注释）：① 锚点写成带 `\t` 前缀而源码顶格 → 命中 0 次；② 替换串自带 `\t` 而源码行已有缩进 → 叠成两层；③ **上游那两个文件是 CRLF 行尾**，锚点写 `\n` → 逐字全不匹配而"肉眼明明一样"。现在的写法：锚点一律用 `\n`，由 `normalizeEol()` 按目标文件行尾折算。
+12. **补丁随包分发**（`patches/` 在 `package.json` 的 `files` 白名单里）。上游哪天自己修好了，`verify` 会报「落盘：未应用」而不是假装成功——那正是该退休的信号；长期无提交则转整包接管（形态参照 `dsh-maid-preset` 内联 `meow-memory` 的做法）。
+13. **凡是会让 pnpm 解析 lockfile 的子命令，都要包上供应链门禁重试。** 只给 `install` 加是不够的——`patch-commit` 内部**同样会重新校验**，升级到刚发布不久的新版本时必然被 `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` 拦下（2026-10-18 实测）。
+14. **引用宿主自带工具链（pnpm/node）别写死单一路径。** 宿主升级会把运行时搬家（`resources/runtime/pnpm/` → `resources/runtime/primary-runtime/dependencies/pnpm/`），写死就会静默回退到 PATH，而这台机 PATH 上根本没有 pnpm。改成候选清单探测第一个存在的。
+15. **升级三步不能颠倒**：先摘旧版本 `patchedDependencies` 登记 → 改 `dependencies` 并 install 到干净新版本 → 再跑 `upgrade`。`pnpm patch` 只认**已安装**的版本，顺序反了直接 `ERR_PNPM_PATCH_VERSION_NOT_FOUND`。
 
 ## 附：暂未遇到
 
