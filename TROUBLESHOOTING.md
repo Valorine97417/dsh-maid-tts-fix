@@ -8,6 +8,14 @@
 
 ---
 
+## 2026-10-18：切换会话时同消息自动朗读两遍
+
+- **已证实原因**：主视图 `claimAutomaticPlayback` 用 `PlaybackController.automaticallyPlayed`，跨会话观察者另用局部 `played`；后者只在 `scan` 时排除 `mainView`，挂过的监听不会因切回前台而撤销，出队也不查主视图是否已经播放。同消息可被两个入口各领一次。此结论是代码与静默逻辑回放确认的缺陷，尚不能断言用户当时每次重复均由此引起。
+- **复现与修复**：`_probe/tts-autoplay-dedup-regress.mjs --installed` 在旧落盘上四项失败（后台→前台的 main-first/remote-first、前台→后台、后台完成后迟到前台，均 calls=2）；连续轮次与手动重复通过。修改两版意图层，让跨会话 `pump` 在出队、非空范围解析后，与主视图共享消息级 `automaticallyPlayed` 并同步认领。修复后意图层 12/12、实际新落盘 6/6 均通过；脚本执行真实 watcher/claim/playRemote，音频出口、store 与定时器由桩替代，无网络、音频或 DOM。
+- **落地**：2026-10-18T07:31Z 执行现有 `scripts/patch.mjs redo`，重放 33 条编辑、两目标语法检查与供应链校验通过；`verify` 登记/hash/字节落盘通过。新补丁 26590 字节、SHA256 `822b683149404a83e6579954caec61690e9d9d05c746ca297fd05ed4216d7b6f`。未手改 node_modules、未改声音配置、未重启、未真实播放。
+- **边界**：标记提取的静默断言保留开头“老大”，未证实该提取器会删称呼；当前 voicedesign 不走实时流式。尚未验已打开页面是否加载新 bundle，不能把落盘与逻辑测试当听感恢复。旧崩溃日志 2026-10-17T18:51:07.544Z 有 TTS bundle import failed，不能用它证明本次重复因补丁失效。
+- **回退快照**：本机 `.patch-backups/dedup-2026-10-18T07-31-38-318Z/manifest.json` 保存部署前 11 文件的副本、字节数、MD5、mtime；部署后为 `dedup-2026-10-18T07-32-03-474Z/manifest.json`。旧 patch 26307 字节、MD5 `0b629339d9d15b8b9501664b5aec69ef`；新 patch MD5 `0f0a0d32b3330e34dc81f70c389aefcd`。workspace/package/config 内容未变，lockfile 与两份 patch、实装 client 字节变化，文本 chunk 内容不变。需要回退时只恢复该快照对应的 profile/repo patch 与 lock/workspace，再由 pnpm 正规重装核对；勿覆盖旁人的后续配置。`redoOne` 本身只恢复临时摘掉的登记，**不会自动备份全部文件**。
+
 ## 一、安装与部署（与 dsh-xiaomi-tts 的依赖关系、加载顺序）
 
 **依赖**：本插件是 `dsh-xiaomi-tts` 的**维护层**，不是替代品。它自己只做两件事——携带补丁正本（`patches/`）、启动时体检补丁是否还活着（`index.js` → `lib/selfcheck.js`）；朗读能力全来自上游。
@@ -63,7 +71,7 @@
 - **症状**：verify 报「lockfile 的 hash 与补丁正本不符」，但**没人改过补丁**。
 - **原因**：`.patch` 的 sha256 就是 lockfile 里的 `patch_hash`，任何换行转换都会让它对不上——不是补丁坏了，是 git 动了字节。
 - **解法**：本仓 `.gitattributes` 已写死 `*.patch -text`，其余文本统一 LF（`* text=auto eol=lf`）。**克隆后别用会改行尾的编辑器保存 `.patch`。**
-- **验证**：`sha256sum patches/dsh-xiaomi-tts@3.0.9.patch` = `7bacff79…4e5a`（26307 字节）。
+- **验证**：`sha256sum patches/dsh-xiaomi-tts@3.0.9.patch` = `822b6831…d7b6f`（26590 字节，2026-10-18 共享去重修复后；旧适配版为 `7bacff79…4e5a` / 26307 字节）。
 
 ### 1.8 启动自检说补丁有问题，怎么办
 
@@ -271,7 +279,7 @@
 | 项 | 路径 | 说明 |
 | --- | --- | --- |
 | 本仓 | `D:\DeepSeek Harness\Works\dsh-maid-tts-fix` | 远端 `Valorine97417/dsh-maid-tts-fix` |
-| 补丁正本 | `dsh-maid-tts-fix/patches/dsh-xiaomi-tts@3.0.9.patch` | 26307 字节 / sha256 `7bacff7947105f7e21a25a8e972a7837c687256442b1e2259091657e40594e5a` |
+| 补丁正本 | `dsh-maid-tts-fix/patches/dsh-xiaomi-tts@3.0.9.patch` | 26590 字节 / sha256 `822b683149404a83e6579954caec61690e9d9d05c746ca297fd05ed4216d7b6f` |
 | 意图层 | `dsh-maid-tts-fix/lib/edits.js` | **按版本分发的分发器** → `edits-v308.js`（展开 32 条）/ `edits-v309.js`（展开 33 条）；锚点 + `expect`；全有或全无、幂等 |
 | 体检判据 | `dsh-maid-tts-fix/lib/selfcheck.js` | **16 条 `APPLIED_MARKERS`**，逻辑名 `@client`(12) / `@text`(4)，按内容认文件 |
 | 命令行 | `dsh-maid-tts-fix/scripts/patch.mjs` | `list / install / verify / remove / upgrade / redo`；pnpm 走候选路径探测 |
