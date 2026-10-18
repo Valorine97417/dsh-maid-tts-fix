@@ -26,15 +26,36 @@ import process from 'node:process'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { listPatches, inspectProfile, describe as describeRows, installedVersion } from '../lib/selfcheck.js'
-import { planEdits, EDITS, TARGET_FILES } from '../lib/edits.js'
+import { planEdits, editCountOf, knownEditModules } from '../lib/edits.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '..')
 const PATCH_DIR = path.join(REPO, 'patches')
 const BACKUP_DIR = path.join(REPO, '.patch-backups')
 
-/** DSH 自带的 pnpm。找不到就退回 PATH 上的 pnpm。 */
-const BUNDLED_PNPM = 'D:/DeepSeek Harness/resources/runtime/pnpm/bin/pnpm.cjs'
+/**
+ * DSH 自带的 pnpm。找不到就退回 PATH 上的 pnpm。
+ *
+ * 2026-10-18 实测：硬编码的单一路径（`resources/runtime/pnpm/bin/pnpm.cjs`）
+ * 在某次宿主升级后**不见了**——DSH 把运行时搬到了 `runtime/primary-runtime/
+ * dependencies/` 与用户目录 `~/.dsh/dsh-runtimes/<runtime>/dependencies/` 下。
+ * 路径写死就会在换个宿主版本后静默退回 PATH，而这台机的 PATH 上**没有 pnpm**
+ * （实测 `which pnpm` 为空），于是 install/upgrade 全线失败。
+ * 所以改成按候选清单探测第一个存在的。
+ */
+const PNPM_CANDIDATES = [
+  'D:/DeepSeek Harness/resources/runtime/primary-runtime/dependencies/pnpm/bin/pnpm.cjs',
+  path.join(os.homedir(), '.dsh', 'dsh-runtimes', 'dsh-primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.cjs'),
+  'D:/DeepSeek Harness/resources/runtime/pnpm/bin/pnpm.cjs',
+]
+
+/** 第一个存在的 pnpm 入口；都不存在返回 undefined（调用方退回 PATH）。 */
+function resolveBundledPnpm() {
+  for (const candidate of PNPM_CANDIDATES) {
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return undefined
+}
 
 const has = flag => process.argv.includes(flag)
 function argValue(flag) {
@@ -115,9 +136,10 @@ function removePatchedDependency(text, key) {
 const POLICY_OVERRIDE_ARGS = ['--config.minimumReleaseAge=0']
 
 function spawnPnpm(args) {
-  const useBundled = fs.existsSync(BUNDLED_PNPM)
+  const bundled = resolveBundledPnpm()
+  const useBundled = bundled !== undefined
   const command = useBundled ? process.execPath : 'pnpm'
-  const argv = useBundled ? [BUNDLED_PNPM, ...args] : args
+  const argv = useBundled ? [bundled, ...args] : args
   console.log(`\n$ pnpm ${args.join(' ')}   （cwd: ${profile}）`)
   const result = spawnSync(command, argv, { cwd: profile, stdio: 'inherit', shell: false })
   if (result.error) throw result.error
@@ -352,7 +374,7 @@ function cmdUpgrade() {
  */
 function pickUpgradeVersion(patch, installed) {
   if (installed === undefined) return { fail: `✗ ${patch.packageName}：读不到已装版本，装了吗？` }
-  if (installed === patch.version) return { skip: `· ${patch.packageName}：补丁已是 ${installed}，无需重做。` }
+  if (installed === patch.version) return { skip: `· ${patch.packageName}：补丁已是 ${installed}，无需重做（改了补丁意图就用 redo）。` }
   return { version: installed }
 }
 
@@ -441,7 +463,8 @@ function redoOne(patch, version, dry) {
   const staging = path.join(profile, 'node_modules', '.pnpm_patches', `${patch.packageName}@${version}`)
 
   if (dry) {
-    console.log(`  将 patch 出 ${version} 的临时目录，按 ${EDITS.length} 条编辑重放，再 patch-commit。`)
+    const n = editCountOf(staging, file => fs.readFileSync(file, 'utf8'))
+    console.log(`  将 patch 出 ${version} 的临时目录，按意图模块重放（${n} 条编辑），再 patch-commit。`)
     return true
   }
 
@@ -479,6 +502,13 @@ function redoOne(patch, version, dry) {
   if (status !== 0) {
     restoreRegistration()
     console.error(`  pnpm patch 退出码 ${status}`)
+    // 最常见的一种失败：目标版本还没装进 profile。`pnpm patch` 只认**已安装**
+    // 的版本，所以升级必须"先升上游、再打补丁"。不说清楚的话，人容易以为
+    // 是补丁脚本坏了，然后去翻 edits.js——方向全错（2026-10-18 实测踩到）。
+    console.error('  提示：`pnpm patch` 只认 profile 里**已安装**的版本。若报的是')
+    console.error(`        ERR_PNPM_PATCH_VERSION_NOT_FOUND，先把上游升到 ${version}（摘掉旧版`)
+    console.error('        本的 patchedDependencies 登记 → 改 dependencies → pnpm install），')
+    console.error('        再回来跑 upgrade。参见 TROUBLESHOOTING.md 1.9。')
     return false
   }
 
@@ -507,8 +537,9 @@ function redoOne(patch, version, dry) {
   }
 
   // 语法不过就绝不 commit——一个语法错的补丁会把插件整个弄哑。
+  // 目标文件从 plan 里取（3.0.9 起文本那支的文件名带构建哈希，不能硬编码）。
   let syntaxOk = true
-  for (const rel of TARGET_FILES) {
+  for (const rel of plan.targetFiles ?? []) {
     const check = spawnSync(process.execPath, ['--check', path.join(staging, rel)], { encoding: 'utf8' })
     if (check.status !== 0) {
       console.error(`  ✗ 语法检查失败：${rel}\n${check.stderr.trim()}`)
@@ -521,7 +552,10 @@ function redoOne(patch, version, dry) {
   }
   console.log('  node --check 通过')
 
-  const commit = runPnpm(['patch-commit', staging])
+  // patch-commit 内部会重新校验 lockfile 的供应链门禁。刚发布不久的版本
+  // （minimumReleaseAge 截止线内）会在这里被 ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION
+  // 拦下——升级到新版本时必然踩到。所以这里也要带 retryPolicy。
+  const commit = runPnpm(['patch-commit', staging], { retryPolicy: true })
   if (commit !== 0) {
     restoreRegistration()
     console.error(`  patch-commit 退出码 ${commit}`)

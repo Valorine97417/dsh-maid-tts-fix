@@ -2,6 +2,12 @@
 
 DSH 小困插件 · **朗读与音色维护层**：给 [dsh-xiaomi-tts](https://github.com/ppy-web/dsh-plugin-xiaomi-mimo-tts) 装上能跨行的 `style`/`script` 剥离，让 VCP 卡片的 CSS 不再被念出来；**没写标记时也不念卡片**；切会话不掐断朗读；**隔壁会话跑完也自动念一遍**；**记忆反思轮不念、改念上一条**；并**盯着这个补丁别掉**。音色提示词的定稿与参照样本说明也收在这里。
 
+## 2026-10-18：双入口重复朗读修复
+
+主视图自动朗读与跨会话队列现在共享 `PlaybackController.automaticallyPlayed`，按 `sessionId:messageId` 在真正出队播放前认领，避免切换会话、队列迟到导致同消息自动朗读两遍；手动重播不受该自动去重影响。意图同时维护于 `lib/edits-v308.js` 与 `lib/edits-v309.js`。
+
+静默行为回归：`node _probe/tts-autoplay-dedup-regress.mjs`（两版意图 12/12）；`node _probe/tts-autoplay-dedup-regress.mjs --installed`（实际落盘 6/6，另有称呼前缀保留检查）。本次已正规 `redo`、`verify` 通过，未播放音频、未重启；**尚未验证已打开页面加载新 bundle 或真实听感恢复**。当前 3.0.9 补丁为 26590 字节，SHA256 `822b683149404a83e6579954caec61690e9d9d05c746ca297fd05ed4216d7b6f`。事故证据与回退快照见 `TROUBLESHOOTING.md`。
+
 ## 一、病根：漂亮的卡片，念出来是 CSS
 
 插件剥 HTML 用的是单行正则：
@@ -18,7 +24,7 @@ VCP 卡片的样式写在 `<style>` 块里，而 CSS 是**多行**的。这个�
 
 不是"不知道念哪一段"，是**念了不该念的**——卡片做得越精致，念出来的垃圾越多。
 
-补丁做四件事：**别念出 CSS**（改两处文件各一遍）、**只念重点**（见第一节之二）、**切会话不打断且隔壁跑完也念**（见第一节之三、之一之四）、**记忆反思轮不念、改念上一条**（见第一节之五）。`lib/client.js` 与 `lib/shared-DQIrhcy-.js` 是同一个函数的两个副本，漏一个就等于没修（跨会话与反思跳过那几段只在 `client.js`——`PlaybackController` 与 `latestAssistantMessageId` 只存在于客户端那份）。
+补丁做四件事：**别念出 CSS**（改两处文件各一遍）、**只念重点**（见第一节之二）、**切会话不打断且隔壁跑完也念**（见第一节之三、之一之四）、**记忆反思轮不念、改念上一条**（见第一节之五）。文本清洗那个函数在上游产物里有**两个副本**（3.0.8 时代是 `lib/client.js` 与 `lib/shared-DQIrhcy-.js`；3.0.9 换打包器后是 `lib/client.js` 与一支带构建哈希的文本 chunk），漏一个就等于没修。本仓一律用逻辑名 `@client` / `@text` 指代，由内容认文件。跨会话与反思跳过那几段只在客户端那份——`PlaybackController` 与 `latestAssistantMessageId` 只存在于客户端 bundle。
 
 | 改动 | 做什么 |
 | --- | --- |
@@ -118,7 +124,7 @@ v6.42 把剥法改成**宽容模式**：遇到未闭合的 `<!--`，吃掉**它�
 | 剥完 trim 为空 → **原样返回** | 纯卡片消息退回老行为 | 宁可念卡片，绝不念成空 |
 | **未闭合卡片不动** | 流式中间帧原样留着 | 宁可多念半句，也不能吞掉卡片之后的正文 |
 
-验证：原型探针 `_probe/tts-card-strip-probe.mjs` 8/8；端到端 `_probe/tts-firstseg-e2e.mjs` 扩到 12 条（⑩ 纯卡片不许念成空、⑪ 卡片在末尾正文保留、⑫ 嵌套 div 只剥卡片本身）**12 过 0 挂**。
+验证：原型探针 `_probe/tts-card-strip-probe.mjs` **11/11**；端到端 `_probe/tts-firstseg-e2e.mjs` 扩到 12 条（⑩ 纯卡片不许念成空、⑪ 卡片在末尾正文保留、⑫ 嵌套 div 只剥卡片本身）**12 过 0 挂**。
 
 **这是兜底，不是替代**：标记仍要每条都写。详见 TROUBLESHOOTING 事故单 2.10。
 
@@ -143,7 +149,7 @@ v6.42 把剥法改成**宽容模式**：遇到未闭合的 `<!--`，吃掉**它�
 - 归属会话自己点停 / 开始新一轮朗读 → 停
 - `cancelPlayback`（新回复开始时上游会调）→ 只停归属会话的，不越权
 
-行为探针：`_probe/tts-switch-probe.mjs`——用 `cutFunction` 从落盘的 client.js 抠出**真实的** `PlaybackController` 类，在 `node:vm` 沙箱里喂桩，7 组场景 20 用例全过（播放中切走不停 / 空闲切走正常清 / 不越权 cancel / 归属 cancel 停 / 手动暂停后切回来还是暂停态 / 循环判据不再看 activeSessionId / 空闲切回正常重置）。探针第一版把 `releaseCurrentAudio` 桩掉了，结果 `stopCurrent` 清空链断了、误报一堆——**桩要贴着真实生命周期给，别图省事**。
+行为探针：`_probe/tts-switch-probe.mjs`——用 `cutFunction` 从落盘的 client.js 抠出**真实的** `PlaybackController` 类，在 `node:vm` 沙箱里喂桩，**11 条断言全过**（播放中切走不停 / 空闲切走正常清 / 不越权 cancel / 归属 cancel 停 / 手动暂停后切回来还是暂停态 / 循环判据不再看 activeSessionId / 空闲切回正常重置）。探针第一版把 `releaseCurrentAudio` 桩掉了，结果 `stopCurrent` 清空链断了、误报一堆——**桩要贴着真实生命周期给，别图省事**。
 
 一句边界：这一节管的是**已经开播之后**不被切会话掐断；「**隔壁会话跑完了自动念一遍**」是另一套全局观察者，见第一节之四（2026-10-15 补上，原先这里写的是"没顺手做"）。
 
@@ -242,7 +248,7 @@ meow-memory 会定时往会话里插一条「记忆反思任务」，那一轮�
 
 改 node_modules 等于没改。所以现在：
 
-- 补丁正本在本仓 `patches/dsh-xiaomi-tts@3.0.8.patch`
+- 补丁正本在本仓 `patches/dsh-xiaomi-tts@3.0.9.patch`
 - 登记进 profile 的 `pnpm-workspace.yaml` → `patchedDependencies`
 - hash 落进 `pnpm-lock.yaml` → `patch_hash`（**就是 `.patch` 文件的 sha256**）
 - 此后任何 install / 重铺都会自动重打
@@ -264,10 +270,10 @@ node scripts/patch.mjs upgrade --to 3.1.0     # 指定目标版本，默认按�
 `verify` 输出长这样：
 
 ```text
-✓ 登记：pnpm-workspace.yaml 的 patchedDependencies → dsh-xiaomi-tts@3.0.8
-✓ lockfile hash 与补丁正本一致：4f89e11a6e4e3f31…
+✓ 登记：pnpm-workspace.yaml 的 patchedDependencies → dsh-xiaomi-tts@3.0.9
+✓ lockfile hash 与补丁正本一致：7bacff7947105f7e…
+✓ 落盘：lib/text-B7NACAYZ.js 已应用
 ✓ 落盘：lib/client.js 已应用
-✓ 落盘：lib/shared-DQIrhcy-.js 已应用
 ```
 
 ### 一个 pnpm 的盲区（install 会假装成功）
@@ -285,7 +291,7 @@ node scripts/patch.mjs upgrade --to 3.1.0     # 指定目标版本，默认按�
 
 这是本仓存在的一半理由。**补丁不影响上游更新，但前提是升完得重做补丁。**
 
-`patchedDependencies` 的键是**精确版本**（`dsh-xiaomi-tts@3.0.8`）。上游一发新版，
+`patchedDependencies` 的键是**精确版本**（`dsh-xiaomi-tts@3.0.9`）。上游一发新版，
 这个键就悬空——实测（2026-10-15）pnpm 会直接报 `ERR_PNPM_UNUSED_PATCH` 并
 **中止整个 install**。这其实是好事（不会假装成功），但意味着不重做补丁就升不动。
 
@@ -304,10 +310,32 @@ verify                         → 四项核对
 锚点所在的那几行时，重放会明确报出是哪一条、期望命中几次、实际几次，而不是
 甩一个上下文对不上的 diff 让人自己啃——照着源码把锚点更新一下再跑即可。
 
+### 意图按上游版本分家（`edits.js` 是分发器）
+
+2026-10-18 起，`lib/edits.js` 不再直接写编辑，而是**按 profile 里那份包的
+`package.json` 版本**挑意图模块：
+
+| 上游版本 | 意图模块 | 展开后的重放条数 |
+| --- | --- | --- |
+| 3.0.8 | `lib/edits-v308.js` | 32 |
+| 3.0.9 | `lib/edits-v309.js` | 33 |
+
+**为什么必须分家**：3.0.9 换了打包器（rolldown），产物形态与 3.0.8 不是同一棵树——
+文本工具被拆进**带构建哈希**的独立 chunk（`shared-DQIrhcy-.js` 消失，变成
+`text-B7NACAYZ.js`），流式旁路从 `scopedLiveText` 换成 `applyTtsLivePlaybackScope`，
+`PlaybackController` 的两个方法也多了一行。锚点是逐字的，跨版本必然整批失配。
+未登记的版本会**回落到最新的那个模块**——那样锚点失配时 `planEdits` 会明确报出
+「哪一条期望几次、实际几次」，而不是静默走旧模块把补丁打歪。
+
+同理，`lib/selfcheck.js` 的 `APPLIED_MARKERS` 用**逻辑名** `@client` / `@text`
+而不是真实路径，由 `resolveMarkerFiles()` 按**内容**认文件（谁含
+`function removeTtsMarkup(value) {` 谁就是文本那支）。写死带哈希的文件名等于给
+下一次升级埋雷。
+
 ### 改了补丁意图、但版本没变：`redo`
 
 往 `lib/edits.js` 里加了新编辑（比如加那条 `spoken-override`），上游版本却没动，
-这时跑 `upgrade` 会被"补丁已是 3.0.8，无需重做"挡回来。用 `redo`——流程一模一样，
+这时跑 `upgrade` 会被"补丁已是 3.0.9，无需重做"挡回来。用 `redo`——流程一模一样，
 只差在**不检查版本变化**。
 
 **这里有个坑，卡了整整一轮（2026-10-15 实测）**：`pnpm patch` 对已经登记在
@@ -350,11 +378,30 @@ pnpm patch <包>@<版本>              → 这回才是干净的上游原样
 3. 逐字节比对重放结果与 patch-commit 出来的版本
 
 结果是**完全一致**。端到端演练（把补丁文件名伪装成旧版本、逼 `upgrade` 走完整
-流程）生成的补丁，sha256 与原正本逐字节相同。补丁从 4120 字节一路长到现在的
+流程）生成的补丁，sha256 与原正本逐字节相同。补丁从 4120 字节一路长到 3.0.8 时代的
 23587 字节（`spoken-override` → 6144、`spoken-override-entry` → 6921、切会话不打断
 → 14883、跨会话自动播报 → 21868、反思轮跳过初版 → 23356、判据修正 → 23082、
 首轮反思补判据 → 23463、标记收尾容错 → 23587），每一次 `redo` 都是一次实测，
 重放始终逐字节可复现。
+
+3.0.9 换打包器后条数从 32 涨到 33 条（多一条是为了适配 `applyTtsLivePlaybackScope`
+的新签名），补丁为 **26307 字节 / sha256 `7bacff7947105f7e21a25a8e972a7837c687256442b1e2259091657e40594e5a`**。
+
+`verify` 绿了只说"补丁在"，不说"行为对"。行为分两层验：
+
+- `_probe/tts-309-landed-check.mjs` —— **落地核对**（7 条断言）：登记在不在 / lockfile 的
+  patch_hash 与补丁正本 sha256 对不对 / 16 条落盘标记逐条命中 / 已装版本与补丁版本一致。
+  它直接跑 `lib/selfcheck.js` 的 `inspectProfile`，**就是宿主启动时真跑的那套逻辑**。
+- `_probe/tts-spoken-pipeline.mjs` —— **行为核对**（12 条断言）：三段输入（有标记 / 无标记 /
+  写残标记）各走一遍真实清洗链，外加那四条顺序契约——`extractTtsSpokenOverride` 必须在
+  `prepareSpeechText` / `firstTtsSegments` / `prepareTtsText` **之前**跑。顺序反了，标记会被
+  当作 HTML 注释剥掉，直接退回念全文，而 `verify` 照样是绿的。
+
+2026-10-18 实测：13 个探针全绿（`tts-309-landed-check` 7/7、`tts-spoken-pipeline` 12/12、
+`tts-spoken-probe` 15/15、`tts-switch-probe` 11/11、`tts-firstseg-e2e` 12/12、
+`tts-card-strip-probe` 11/11、`tts-card-regress` 7/7、`tts-text-probe` 11/11、
+`tts-cross-session-probe` 11/11、`tts-markup-lenient-probe` 16/16、`tts-fix-replay-test` 8/8；
+`tts-mark-audit` 是测量型不判失败，`tts-pick-gen` 需真 API 默认 dry-run）。
 
 ## 五、启动自检：它不会悄悄死掉
 
@@ -397,6 +444,38 @@ pnpm patch <包>@<版本>              → 这回才是干净的上游原样
 > **提示词写在哪、怎么生效，见 `voice-refs/prompt.md`。** 一句话版：写进 **profile 的** `cordis.patch.yml` 的 `xiaomi-mimo-tts` 段（`voiceDesignPrompt` 与 `voiceDesignCustomPrompt` 两处必须一致），改完**重启 DSH**，且插件设置面板里的本地值会盖过文件。
 >
 > 那个段里带着 API 密钥，所以**不进任何仓库**——本仓只存「怎么调」，不存「调到哪台机器上」。
+
+### 改配置改哪个文件：`cordis.patch.yml` 才是权威
+
+2026-10-18 踩过：音色提示词、`readScope`、`voiceVolume` 一起失效，排查一圈发现
+**改错了文件**。profile 里两个文件都长得像配置：
+
+| 文件 | 角色 |
+| --- | --- |
+| `cordis.yml` | 基础层（bundle 默认 + 已落盘的实际值），约 234 条 |
+| `cordis.patch.yml` | **用户覆盖层**，46 条 override，启动时叠在基础层上 |
+
+关键在 `applyEntryPatches` 的合并语义——对 config 是 **整体替换**，不是深合并：
+
+```js
+for (const [key, value] of Object.entries(overrides)) {
+  if (key === "id") continue;
+  target[key] = value;      // ← 整个 config 被换掉，不是逐字段并
+}
+```
+
+所以 patch 文件里那条只要存在，`cordis.yml` 里那条就**整体作废**。判断当前真实生效值的
+唯一可靠办法是问宿主自己：
+
+```js
+const a = await import('…/dsh-app-boot/lib/index.js')
+const prof = a.loadProfile('dsh', 'desktop', '<app package.json>')
+prof.patches.find((p) => p.id === 'xiaomi-mimo-tts').config   // ← 这才是生效值
+```
+
+跑法：`ELECTRON_RUN_AS_NODE=1 '<DeepSeek Harness.exe>' <script.mjs>`。
+**别拿 `cordis.yml` 的字段数当结论**——那层可能整个被盖掉。两处都要改时，先把 patch 层改对，
+再让 `cordis.yml` 跟上（或不改它，反正它不生效）。
 
 ## 八、和 dsh-maid-preset 的关系
 

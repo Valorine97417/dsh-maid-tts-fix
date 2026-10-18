@@ -1,8 +1,8 @@
 diff --git a/lib/client.js b/lib/client.js
-index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..1b1610350d2017f74c4888581cb2a57f16ebc2e3 100644
+index 0f6b3a34b42e08f5d9049caf7107d2bbd904f70e..300cda9f7b378aef3404cb53823b9c46970ffffd 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -303,11 +303,52 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
+@@ -448,11 +448,52 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
  const MARKDOWN_BLOCKQUOTE_RE = /(^|\n)\s*>\s?/g;
  const MARKDOWN_INLINE_FORMAT_RE = /`+|[*_~]{1,3}/g;
  const MARKDOWN_TABLE_SEP_RE = /[|]/g;
@@ -51,12 +51,12 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..1b1610350d2017f74c4888581cb2a57f
  	return value.replace(TTS_WINDOWS_PATH_PATTERN, " ").replace(TTS_RELATIVE_PATH_PATTERN, " ").replace(TTS_PROJECT_PATH_PATTERN, " ").replace(TTS_UNIX_PATH_PATTERN, " ");
  }
  function removeTtsMarkup(value) {
--	let text = value.replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
-+	let text = stripTtsCards(stripTtsStyleBlocks(value)).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
+-	let text = removeFencedCode(value).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
++	let text = stripTtsCards(stripTtsStyleBlocks(removeFencedCode(value))).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
  	text = text.replace(TTS_URL_PATTERN, " ");
  	return removeTtsPaths(text);
  }
-@@ -471,7 +512,16 @@ function appendTtsSmartTruncationOutro(fullText, spokenText, random = Math.rando
+@@ -667,12 +708,23 @@ function appendTtsSmartTruncationOutro(fullText, spokenText, random = Math.rando
  	return `${trimmed}${TTS_OUTRO_PAUSE_END.test(trimmed) ? "" : "。"}${TTS_SMART_TRUNCATION_OUTROS[index]}`;
  }
  /** Apply the configured playback range and Smart automatic closing cue to a completed reply. */
@@ -70,223 +70,29 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..1b1610350d2017f74c4888581cb2a57f
  function applyTtsPlaybackScope(value, scope, automatic, random = Math.random) {
 +	const override = extractTtsSpokenOverride(value);
 +	if (override !== void 0) return override;
- 	const scoped = applyTtsReadScope(value, resolveTtsReadScope(scope, automatic));
+ 	const scoped = scope === "smart" && automatic ? firstTtsSegments(value, 2) : applyTtsReadScope(value, resolveTtsReadScope(scope, automatic));
  	return scope === "smart" && automatic ? appendTtsSmartTruncationOutro(value, scoped, random) : scoped;
  }
-@@ -1496,6 +1546,8 @@ var PlaybackController = class {
- 	request = null;
- 	generation = 0;
- 	activeSessionId = null;
-+	playbackOwnerId = null;
-+	remoteSessionId = null;
- 	beforePlayback = null;
- 	volume = 1;
- 	voiceRate = 1;
-@@ -1523,31 +1575,56 @@ var PlaybackController = class {
- 	}
- 	activateSession(sessionId) {
- 		if (this.activeSessionId === sessionId) return;
--		this.generation += 1;
--		this.stopCurrent();
--		this.segmentedState = null;
-+		this.activeSessionId = sessionId;
- 		this.liveSessions.clear();
- 		this.completedSessions.clear();
- 		this.completedMessages.clear();
--		this.activeSessionId = sessionId;
-+		if (this.isPlayingNow()) return;
-+		this.generation += 1;
-+		this.stopCurrent();
-+		this.segmentedState = null;
-+		this.playbackOwnerId = null;
- 		this.publish(this.emptyView());
- 	}
-+	/** 现在有没有音频在响（含排队中与合成中）——切会话时靠它决定要不要打断。 */
-+	isPlayingNow() {
-+		return this.current !== null || this.segmentQueue.length > 0 || this.segmentedState !== null || this.request !== null;
-+	}
-+	/** 这段播放属不属于这个会话：当前在看的，或者被跨会话播报临时接管的。 */
-+	ownsSession(sessionId) {
-+		return this.activeSessionId === sessionId || this.remoteSessionId === sessionId;
-+	}
-+	/** 给"不是当前正在看的那个会话"播一段——绕过 activeSessionId 门禁，走 remoteSessionId。 */
-+	async playRemote(sessionId, messageId, text, automatic, fallback) {
-+		const previous = this.remoteSessionId;
-+		this.remoteSessionId = sessionId;
-+		try {
-+			if (splitTtsSegments(text).length > 1) await this.segmented(sessionId, messageId, text, automatic, fallback);
-+			else await this.toggle(sessionId, messageId, text, automatic, fallback, "mp3");
-+		} finally {
-+			this.remoteSessionId = previous;
-+		}
-+	}
- 	cancelPlayback(sessionId) {
- 		if (this.activeSessionId !== sessionId) return;
-+		if (this.playbackOwnerId !== null && this.playbackOwnerId !== sessionId) return;
- 		this.segmentedState = null;
- 		this.generation += 1;
- 		this.stopCurrent();
-+		this.playbackOwnerId = null;
- 		this.publish(this.emptyView());
- 	}
- 	deactivateSession(sessionId) {
- 		if (this.activeSessionId !== sessionId) return;
-+		this.activeSessionId = null;
-+		if (this.isPlayingNow()) return;
- 		this.generation += 1;
- 		this.stopCurrent();
- 		this.segmentedState = null;
-+		this.playbackOwnerId = null;
- 		this.liveSessions.clear();
- 		this.completedSessions.clear();
- 		this.completedMessages.clear();
--		this.activeSessionId = null;
- 		this.publish(this.emptyView());
- 	}
- 	observeSession(sessionId, running, latestMessageId) {
-@@ -1586,7 +1663,7 @@ var PlaybackController = class {
- 		});
- 	}
- 	pauseSegmented(sessionId, messageId) {
--		if (this.activeSessionId !== sessionId || this.view.source !== "segmented" || this.view.messageId !== messageId) return;
-+		if (this.playbackOwnerId !== sessionId || this.view.source !== "segmented" || this.view.messageId !== messageId) return;
- 		this.generation += 1;
- 		this.stopCurrent();
- 		this.publish({
-@@ -1598,7 +1675,8 @@ var PlaybackController = class {
- 		});
- 	}
- 	async segmented(sessionId, messageId, text, automatic, fallback) {
--		if (this.activeSessionId !== sessionId) return;
-+		if (!this.ownsSession(sessionId)) return;
-+		this.playbackOwnerId = sessionId;
- 		this.beforePlayback?.();
- 		const previous = this.segmentedState;
- 		const resume = previous !== null && previous.sessionId === sessionId && previous.messageId === messageId;
-@@ -1657,7 +1735,7 @@ var PlaybackController = class {
- 			let nextAudio = synthesize(segments[startIndex]);
- 			for (let index = startIndex; index < segments.length; index += 1) {
- 				const blob = await nextAudio;
--				if (generation !== this.generation || this.activeSessionId !== sessionId) return;
-+				if (generation !== this.generation || this.playbackOwnerId !== sessionId) return;
- 				if (this.segmentedState !== null) this.segmentedState.index = index;
- 				if (index + 1 < segments.length) nextAudio = synthesize(segments[index + 1]);
- 				const audio = new Audio(URL.createObjectURL(blob));
-@@ -1682,7 +1760,7 @@ var PlaybackController = class {
- 					audio.addEventListener("ended", ended);
- 					audio.addEventListener("error", failed);
- 					audio.play().then(() => {
--						if (generation === this.generation && this.activeSessionId === sessionId) {
-+						if (generation === this.generation && this.playbackOwnerId === sessionId) {
- 							audioStarted = true;
- 							this.publish({
- 								sessionId,
-@@ -1696,12 +1774,12 @@ var PlaybackController = class {
- 				});
- 				this.segmentQueue = this.segmentQueue.filter((item) => item !== audio);
- 			}
--			if (generation === this.generation && this.activeSessionId === sessionId) {
-+			if (generation === this.generation && this.playbackOwnerId === sessionId) {
- 				this.segmentedState = null;
- 				this.publish(this.emptyView());
- 			}
- 		} catch (error) {
--			if (!controller.signal.aborted && generation === this.generation && this.activeSessionId === sessionId) {
-+			if (!controller.signal.aborted && generation === this.generation && this.playbackOwnerId === sessionId) {
- 				if (!audioStarted && fallback !== void 0) {
- 					this.segmentedState = null;
- 					this.publish(this.emptyView());
-@@ -1721,14 +1799,15 @@ var PlaybackController = class {
- 		}
- 	}
- 	async toggle(sessionId, messageId, text, automatic, fallback, format = "mp3") {
--		if (this.activeSessionId !== sessionId) return;
-+		if (!this.ownsSession(sessionId)) return;
-+		this.playbackOwnerId = sessionId;
- 		this.beforePlayback?.();
- 		if (this.view.source === "complete" && this.view.sessionId === sessionId && this.view.messageId === messageId && this.current !== null) {
- 			const audio = this.current.audio;
- 			const generation$1 = this.generation;
- 			if (audio.paused) try {
- 				await audio.play();
--				if (generation$1 !== this.generation || this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
-+				if (generation$1 !== this.generation || this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
- 				this.publish({
- 					sessionId,
- 					messageId,
-@@ -1737,7 +1816,7 @@ var PlaybackController = class {
- 					error: null
- 				});
- 			} catch {
--				if (generation$1 !== this.generation || this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
-+				if (generation$1 !== this.generation || this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
- 				this.publish({
- 					sessionId,
- 					messageId,
-@@ -1801,7 +1880,7 @@ var PlaybackController = class {
- 				throw new Error(message);
- 			}
- 			const blob = await response.blob();
--			if (generation !== this.generation || this.activeSessionId !== sessionId) return;
-+			if (generation !== this.generation || this.playbackOwnerId !== sessionId) return;
- 			const url = URL.createObjectURL(blob);
- 			const audio = new Audio(url);
- 			audio.volume = this.volume;
-@@ -1811,12 +1890,12 @@ var PlaybackController = class {
- 				url,
- 				audio,
- 				onEnded: () => {
--					if (this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
-+					if (this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
- 					this.releaseCurrentAudio(audio);
- 					this.publish(this.emptyView());
- 				},
- 				onError: () => {
--					if (this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
-+					if (this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
- 					this.releaseCurrentAudio(audio);
- 					this.publish({
- 						sessionId,
-@@ -1833,7 +1912,7 @@ var PlaybackController = class {
- 			audio.addEventListener("error", current.onError);
- 			try {
- 				await audio.play();
--				if (generation !== this.generation || this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
-+				if (generation !== this.generation || this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
- 				this.publish({
- 					sessionId,
- 					messageId,
-@@ -1842,7 +1921,7 @@ var PlaybackController = class {
- 					error: null
- 				});
- 			} catch {
--				if (generation !== this.generation || this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
-+				if (generation !== this.generation || this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
- 				this.publish({
- 					sessionId,
- 					messageId,
-@@ -1852,7 +1931,7 @@ var PlaybackController = class {
- 				});
- 			}
- 		} catch (error) {
--			if (controller.signal.aborted || generation !== this.generation || this.activeSessionId !== sessionId) return;
-+			if (controller.signal.aborted || generation !== this.generation || this.playbackOwnerId !== sessionId) return;
- 			if (!audioCreated && fallback !== void 0) {
- 				this.request = null;
- 				this.publish(this.emptyView());
-@@ -1932,7 +2011,10 @@ function useSettingsSnapshot(scope) {
+ /** Apply the configured automatic range while a reply grows, adding Smart's cue only on completion. */
+ function applyTtsLivePlaybackScope(value, scope, limiter, final = false, random = Math.random) {
++	const spokenOverride = extractTtsSpokenOverride(value);
++	if (spokenOverride !== void 0) return spokenOverride;
+ 	if (resolveTtsReadScope(scope, true) === "full") return value;
+ 	const text = prepareTtsText(value);
+ 	const scoped = limiter.limit(text, final);
+@@ -10699,7 +10751,10 @@ function prepareSpeechText(value) {
  function messageText(legacy, messageId) {
  	for (const node of legacy.nodes) {
  		if (node.kind !== "assistant" || node.messageId !== messageId) continue;
--		return (0, __deepseek_ai_dsh_client_ui_primitives.extractMarkdownPlainText)(prepareTtsText(node.blocks.filter((block) => block.kind === "text").map((block) => block.text).join("\n\n"))).trim();
-+		const rawText = node.blocks.filter((block) => block.kind === "text").map((block) => block.text).join("\n\n");
+-		return prepareSpeechText(assistantText(node.blocks));
++		const rawText = assistantText(node.blocks);
 +		const spokenOverride = extractTtsSpokenOverride(rawText);
 +		if (spokenOverride !== void 0) return spokenOverride;
-+		return (0, __deepseek_ai_dsh_client_ui_primitives.extractMarkdownPlainText)(prepareTtsText(rawText)).trim();
++		return prepareSpeechText(rawText);
  	}
  	return "";
  }
-@@ -1940,10 +2022,37 @@ function messageTime(legacy, messageId) {
+@@ -10707,10 +10762,37 @@ function messageTime(legacy, messageId) {
  	for (const node of legacy.nodes) if (node.kind === "assistant" && node.messageId === messageId) return node.time;
  	return null;
  }
@@ -325,16 +131,214 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..1b1610350d2017f74c4888581cb2a57f
  	}
  	return null;
  }
-@@ -1997,6 +2106,8 @@ function useApiKeySupported(active) {
- 	return supported;
- }
- function scopedLiveText(value, scope, limiter, final = false) {
-+	const spokenOverride = extractTtsSpokenOverride(value);
-+	if (spokenOverride !== void 0) return spokenOverride;
- 	if (resolveTtsReadScope(scope, true) === "full") return value;
- 	const plain = (0, __deepseek_ai_dsh_client_ui_primitives.extractMarkdownPlainText)(prepareTtsText(value)).trim();
- 	const scoped = limiter.limit(plain, final);
-@@ -6842,6 +6953,138 @@ function installTaskSoundWatcher(ctx, controller, getSettings) {
+@@ -12772,6 +12854,8 @@ var PlaybackController = class {
+ 	request = null;
+ 	generation = 0;
+ 	activeSessionId = null;
++	playbackOwnerId = null;
++	remoteSessionId = null;
+ 	beforePlayback = null;
+ 	volume = 1;
+ 	voiceRate = 1;
+@@ -12799,33 +12883,58 @@ var PlaybackController = class {
+ 	}
+ 	activateSession(sessionId) {
+ 		if (this.activeSessionId === sessionId) return;
+-		this.generation += 1;
+-		this.stopCurrent();
+-		this.segmentedState = null;
++		this.activeSessionId = sessionId;
+ 		this.liveSessions.clear();
+ 		this.completedSessions.clear();
+ 		this.completedMessages.clear();
+ 		this.attachedMidRun.clear();
+-		this.activeSessionId = sessionId;
++		if (this.isPlayingNow()) return;
++		this.generation += 1;
++		this.stopCurrent();
++		this.segmentedState = null;
++		this.playbackOwnerId = null;
+ 		this.publish(this.emptyView());
+ 	}
++	/** 现在有没有音频在响（含排队中与合成中）——切会话时靠它决定要不要打断。 */
++	isPlayingNow() {
++		return this.current !== null || this.segmentQueue.size > 0 || this.segmentedState !== null || this.request !== null;
++	}
++	/** 这段播放属不属于这个会话：当前在看的，或者被跨会话播报临时接管的。 */
++	ownsSession(sessionId) {
++		return this.activeSessionId === sessionId || this.remoteSessionId === sessionId;
++	}
++	/** 给"不是当前正在看的那个会话"播一段——绕过 activeSessionId 门禁，走 remoteSessionId。 */
++	async playRemote(sessionId, messageId, text, automatic, fallback) {
++		const previous = this.remoteSessionId;
++		this.remoteSessionId = sessionId;
++		try {
++			if (splitTtsSegments(text).length > 1) await this.segmented(sessionId, messageId, text, automatic, fallback);
++			else await this.toggle(sessionId, messageId, text, automatic, fallback, "mp3");
++		} finally {
++			this.remoteSessionId = previous;
++		}
++	}
+ 	cancelPlayback(sessionId) {
+ 		if (this.activeSessionId !== sessionId) return;
++		if (this.playbackOwnerId !== null && this.playbackOwnerId !== sessionId) return;
+ 		this.segmentedState = null;
+ 		this.generation += 1;
+ 		this.stopCurrent();
++		this.playbackOwnerId = null;
+ 		this.publish(this.emptyView());
+ 	}
+ 	deactivateSession(sessionId) {
+ 		if (this.activeSessionId !== sessionId) return;
++		this.activeSessionId = null;
++		if (this.isPlayingNow()) return;
+ 		this.generation += 1;
+ 		this.stopCurrent();
+ 		this.segmentedState = null;
++		this.playbackOwnerId = null;
+ 		this.liveSessions.clear();
+ 		this.completedSessions.clear();
+ 		this.completedMessages.clear();
+ 		this.attachedMidRun.clear();
+-		this.activeSessionId = null;
+ 		this.publish(this.emptyView());
+ 	}
+ 	observeSession(sessionId, running, latestMessageId, attachedMidRun = false) {
+@@ -12867,7 +12976,7 @@ var PlaybackController = class {
+ 		});
+ 	}
+ 	pauseSegmented(sessionId, messageId) {
+-		if (this.activeSessionId !== sessionId || this.view.source !== "segmented" || this.view.messageId !== messageId) return;
++		if (this.playbackOwnerId !== sessionId || this.view.source !== "segmented" || this.view.messageId !== messageId) return;
+ 		this.generation += 1;
+ 		this.stopCurrent();
+ 		this.publish({
+@@ -12879,7 +12988,8 @@ var PlaybackController = class {
+ 		});
+ 	}
+ 	async segmented(sessionId, messageId, text, automatic, fallback) {
+-		if (this.activeSessionId !== sessionId) return;
++		if (!this.ownsSession(sessionId)) return;
++		this.playbackOwnerId = sessionId;
+ 		this.beforePlayback?.();
+ 		const previous = this.segmentedState;
+ 		const resume = previous !== null && previous.sessionId === sessionId && previous.messageId === messageId;
+@@ -12921,7 +13031,7 @@ var PlaybackController = class {
+ 			for (let index = startIndex; index < segments.length; index += 1) {
+ 				state.index = index;
+ 				const result = await nextAudio;
+-				if (generation !== this.generation || this.activeSessionId !== sessionId) return;
++				if (generation !== this.generation || this.playbackOwnerId !== sessionId) return;
+ 				if (!result.ok) throw result.error;
+ 				const blob = result.blob;
+ 				this.history?.add({
+@@ -12945,7 +13055,7 @@ var PlaybackController = class {
+ 						this.segmentQueue.delete(audio);
+ 					},
+ 					onStarted: () => {
+-						if (generation !== this.generation || this.activeSessionId !== sessionId) return;
++						if (generation !== this.generation || this.playbackOwnerId !== sessionId) return;
+ 						audioStarted = true;
+ 						this.publish({
+ 							sessionId,
+@@ -12956,15 +13066,15 @@ var PlaybackController = class {
+ 						});
+ 					}
+ 				});
+-				if (generation !== this.generation || this.activeSessionId !== sessionId) return;
++				if (generation !== this.generation || this.playbackOwnerId !== sessionId) return;
+ 				state.index = index + 1;
+ 			}
+-			if (generation === this.generation && this.activeSessionId === sessionId) {
++			if (generation === this.generation && this.playbackOwnerId === sessionId) {
+ 				this.segmentedState = null;
+ 				this.publish(this.emptyView());
+ 			}
+ 		} catch (error) {
+-			if (!controller.signal.aborted && generation === this.generation && this.activeSessionId === sessionId) {
++			if (!controller.signal.aborted && generation === this.generation && this.playbackOwnerId === sessionId) {
+ 				controller.abort();
+ 				if (!audioStarted && fallback !== void 0) {
+ 					this.segmentedState = null;
+@@ -12985,14 +13095,15 @@ var PlaybackController = class {
+ 		}
+ 	}
+ 	async toggle(sessionId, messageId, text, automatic, fallback, format = "mp3") {
+-		if (this.activeSessionId !== sessionId) return;
++		if (!this.ownsSession(sessionId)) return;
++		this.playbackOwnerId = sessionId;
+ 		this.beforePlayback?.();
+ 		if (this.view.source === "complete" && this.view.sessionId === sessionId && this.view.messageId === messageId && this.current !== null) {
+ 			const audio = this.current.audio;
+ 			const generation$1 = this.generation;
+ 			if (audio.paused) try {
+ 				await audio.play();
+-				if (generation$1 !== this.generation || this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
++				if (generation$1 !== this.generation || this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
+ 				this.publish({
+ 					sessionId,
+ 					messageId,
+@@ -13001,7 +13112,7 @@ var PlaybackController = class {
+ 					error: null
+ 				});
+ 			} catch {
+-				if (generation$1 !== this.generation || this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
++				if (generation$1 !== this.generation || this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
+ 				this.publish({
+ 					sessionId,
+ 					messageId,
+@@ -13065,7 +13176,7 @@ var PlaybackController = class {
+ 				throw new Error(message);
+ 			}
+ 			const blob = await response.blob();
+-			if (generation !== this.generation || this.activeSessionId !== sessionId) return;
++			if (generation !== this.generation || this.playbackOwnerId !== sessionId) return;
+ 			this.history?.add({
+ 				blob,
+ 				text,
+@@ -13083,12 +13194,12 @@ var PlaybackController = class {
+ 				url,
+ 				audio,
+ 				onEnded: () => {
+-					if (this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
++					if (this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
+ 					this.releaseCurrentAudio(audio);
+ 					this.publish(this.emptyView());
+ 				},
+ 				onError: () => {
+-					if (this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
++					if (this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
+ 					this.releaseCurrentAudio(audio);
+ 					this.publish({
+ 						sessionId,
+@@ -13105,7 +13216,7 @@ var PlaybackController = class {
+ 			audio.addEventListener("error", current.onError);
+ 			try {
+ 				await audio.play();
+-				if (generation !== this.generation || this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
++				if (generation !== this.generation || this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
+ 				this.publish({
+ 					sessionId,
+ 					messageId,
+@@ -13114,7 +13225,7 @@ var PlaybackController = class {
+ 					error: null
+ 				});
+ 			} catch {
+-				if (generation !== this.generation || this.activeSessionId !== sessionId || this.current?.audio !== audio) return;
++				if (generation !== this.generation || this.playbackOwnerId !== sessionId || this.current?.audio !== audio) return;
+ 				this.publish({
+ 					sessionId,
+ 					messageId,
+@@ -13124,7 +13235,7 @@ var PlaybackController = class {
+ 				});
+ 			}
+ 		} catch (error) {
+-			if (controller.signal.aborted || generation !== this.generation || this.activeSessionId !== sessionId) return;
++			if (controller.signal.aborted || generation !== this.generation || this.playbackOwnerId !== sessionId) return;
+ 			if (!audioCreated && fallback !== void 0) {
+ 				this.request = null;
+ 				this.publish(this.emptyView());
+@@ -18088,6 +18199,142 @@ function installTaskSoundWatcher(ctx, controller, getSettings) {
  	};
  }
  
@@ -361,6 +365,10 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..1b1610350d2017f74c4888581cb2a57f
 +			pump();
 +			return;
 +		}
++		// 与主视图共享消息级认领；必须在出队后、开始播放前原子认领。
++		const automaticKey = `${next.sessionId}:${next.messageId}`;
++		if (playback.automaticallyPlayed.has(automaticKey)) { pump(); return; }
++		playback.automaticallyPlayed.add(automaticKey);
 +		pumping = true;
 +		playback.playRemote(next.sessionId, next.messageId, scoped).catch(() => {}).then(() => {
 +			pumping = false;
@@ -472,8 +480,8 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..1b1610350d2017f74c4888581cb2a57f
 +}
  //#endregion
  //#region src/client/style/action.css?raw
- var action_default = "/*\r\n * Read-aloud action button in the assistant message toolbar.\r\n */\r\n\r\n.xmimo-tts-action {\r\n  width: calc(28px + var(--dsh-content-font-delta, 0px));\r\n  height: calc(28px + var(--dsh-content-font-delta, 0px));\r\n  border-radius: var(--dsw-radius-sm);\r\n  color: var(--dsw-alias-label-tertiary);\r\n  cursor: pointer;\r\n  background: transparent;\r\n  border: none;\r\n  justify-content: center;\r\n  align-items: center;\r\n  padding: 6px;\r\n  display: inline-flex;\r\n}\r\n\r\n.xmimo-tts-action:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover) !important;\r\n  color: var(--dsw-alias-label-secondary);\r\n}\r\n\r\n.xmimo-tts-action:disabled {\r\n  cursor: default;\r\n  opacity: 0.45;\r\n}\r\n\r\n.xmimo-tts-spin {\r\n  animation: xmimo-spin 1s linear infinite;\r\n}\r\n\r\n@keyframes xmimo-spin {\r\n  to {\r\n    transform: rotate(360deg);\r\n  }\r\n}\r\n";
-@@ -6945,7 +7188,8 @@ const inject = [
+ var action_default = "/*\n * Read-aloud action button in the assistant message toolbar.\n */\n\n.xmimo-tts-action {\n  width: calc(28px + var(--dsh-content-font-delta, 0px));\n  height: calc(28px + var(--dsh-content-font-delta, 0px));\n  border-radius: var(--dsw-radius-sm);\n  color: var(--dsw-alias-label-tertiary);\n  cursor: pointer;\n  background: transparent;\n  border: none;\n  justify-content: center;\n  align-items: center;\n  padding: 6px;\n  display: inline-flex;\n}\n\n.xmimo-tts-action:hover {\n  background: var(--dsw-alias-interactive-bg-hover) !important;\n  color: var(--dsw-alias-label-secondary);\n}\n\n.xmimo-tts-action:disabled {\n  cursor: default;\n  opacity: 0.45;\n}\n\n.xmimo-tts-pulse {\n  animation: xmimo-pulse 1.2s ease-in-out infinite;\n}\n\n@keyframes xmimo-pulse {\n  0%,\n  100% {\n    opacity: 1;\n  }\n\n  50% {\n    opacity: 0.3;\n  }\n}\n";
+@@ -18386,7 +18633,8 @@ const inject = [
  	"locale",
  	"remote",
  	"configForms",
@@ -483,7 +491,7 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..1b1610350d2017f74c4888581cb2a57f
  ];
  function formatStartupError(error) {
  	return error instanceof Error ? error.message : String(error);
-@@ -7015,6 +7259,7 @@ function apply(ctx) {
+@@ -18461,6 +18709,7 @@ function apply(ctx) {
  	playback.setBeforePlayback(stopOptionalPcm);
  	live.setStateChangeListener((sessionId, messageId, status) => playback.updateLivePlayback(sessionId, messageId, status, "live"));
  	local.setStateChangeListener((sessionId, messageId, status, error) => playback.updateLivePlayback(sessionId, messageId, status, "system", error));
@@ -491,11 +499,11 @@ index e647cda54e72568e61c19f640e6b5ad6b8c75b2a..1b1610350d2017f74c4888581cb2a57f
  	const updateVoiceVolume = () => {
  		const volume = resolveTtsSettings(scope.getSnapshot().value).voiceVolume;
  		live.setVolume(volume);
-diff --git a/lib/shared-DQIrhcy-.js b/lib/shared-DQIrhcy-.js
-index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..d6d27bb8e1f3d3dab615967fd821f74da7f0eb86 100644
---- a/lib/shared-DQIrhcy-.js
-+++ b/lib/shared-DQIrhcy-.js
-@@ -323,11 +323,52 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
+diff --git a/lib/text-B7NACAYZ.js b/lib/text-B7NACAYZ.js
+index 0f3d43995c0f4be02035385685e29c3ddd29774a..0ea0241a1f1b41dc2fc59e8f6288cfb8d66e055a 100644
+--- a/lib/text-B7NACAYZ.js
++++ b/lib/text-B7NACAYZ.js
+@@ -71,11 +71,52 @@ const MARKDOWN_LIST_RE = /(^|\n)\s*(?:[-*+]|\d+[.)])\s+/g;
  const MARKDOWN_BLOCKQUOTE_RE = /(^|\n)\s*>\s?/g;
  const MARKDOWN_INLINE_FORMAT_RE = /`+|[*_~]{1,3}/g;
  const MARKDOWN_TABLE_SEP_RE = /[|]/g;
@@ -544,12 +552,12 @@ index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..d6d27bb8e1f3d3dab615967fd821f74d
  	return value.replace(TTS_WINDOWS_PATH_PATTERN, " ").replace(TTS_RELATIVE_PATH_PATTERN, " ").replace(TTS_PROJECT_PATH_PATTERN, " ").replace(TTS_UNIX_PATH_PATTERN, " ");
  }
  function removeTtsMarkup(value) {
--	let text = value.replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
-+	let text = stripTtsCards(stripTtsStyleBlocks(value)).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
+-	let text = removeFencedCode(value).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
++	let text = stripTtsCards(stripTtsStyleBlocks(removeFencedCode(value))).replace(MARKDOWN_CODE_BLOCK_RE, " ").replace(MARKDOWN_INDENTED_CODE_RE, "$1").replace(MARKDOWN_IMAGE_RE, " ").replace(MARKDOWN_LINK_RE, "$1").replace(MARKDOWN_HTML_TAG_RE, " ").replace(MARKDOWN_HEADING_RE, "$1").replace(MARKDOWN_LIST_RE, "$1").replace(MARKDOWN_BLOCKQUOTE_RE, "$1").replace(MARKDOWN_INLINE_FORMAT_RE, "").replace(MARKDOWN_TABLE_SEP_RE, " ");
  	text = text.replace(TTS_URL_PATTERN, " ");
  	return removeTtsPaths(text);
  }
-@@ -491,7 +532,16 @@ function appendTtsSmartTruncationOutro(fullText, spokenText, random = Math.rando
+@@ -290,12 +331,23 @@ function appendTtsSmartTruncationOutro(fullText, spokenText, random = Math.rando
  	return `${trimmed}${TTS_OUTRO_PAUSE_END.test(trimmed) ? "" : "。"}${TTS_SMART_TRUNCATION_OUTROS[index]}`;
  }
  /** Apply the configured playback range and Smart automatic closing cue to a completed reply. */
@@ -563,6 +571,13 @@ index 03bd33549c6ff66d5474f2b320806b3788f6e6f0..d6d27bb8e1f3d3dab615967fd821f74d
  function applyTtsPlaybackScope(value, scope, automatic, random = Math.random) {
 +	const override = extractTtsSpokenOverride(value);
 +	if (override !== void 0) return override;
- 	const scoped = applyTtsReadScope(value, resolveTtsReadScope(scope, automatic));
+ 	const scoped = scope === "smart" && automatic ? firstTtsSegments(value, 2) : applyTtsReadScope(value, resolveTtsReadScope(scope, automatic));
  	return scope === "smart" && automatic ? appendTtsSmartTruncationOutro(value, scoped, random) : scoped;
  }
+ /** Apply the configured automatic range while a reply grows, adding Smart's cue only on completion. */
+ function applyTtsLivePlaybackScope(value, scope, limiter, final = false, random = Math.random) {
++	const spokenOverride = extractTtsSpokenOverride(value);
++	if (spokenOverride !== void 0) return spokenOverride;
+ 	if (resolveTtsReadScope(scope, true) === "full") return value;
+ 	const text = prepareTtsText(value);
+ 	const scoped = limiter.limit(text, final);

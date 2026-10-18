@@ -2,7 +2,7 @@
   "name": "dsh-maid-tts-fix",
   "description": "DSH 小困插件 · 朗读与音色维护层：给 dsh-xiaomi-tts 装上能跨行的 style/script 剥离，让 VCP 卡片的 CSS 不再被念出来；没写 tts 标记时也不会念卡片上的字；切会话不掐断朗读；隔壁会话跑完也自动念一遍；记忆反思轮不念、改念上一条；tts 标记写残（少一个 >）也照样认得；并在每次启动体检补丁是否还活着（登记 / hash / 落盘三项）。音色提示词与参照样本说明也收在这里。",
   "icon": "assets/plugin-icon.png",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "type": "module",
   "main": "index.js",
   "license": "MIT",
