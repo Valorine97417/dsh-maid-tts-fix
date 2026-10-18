@@ -336,8 +336,8 @@
 | 登记 | `…\profiles\desktop\pnpm-workspace.yaml` → `patchedDependencies` | 当前含 `dsh-video-understand@0.5.2`、`dsh-xiaomi-tts@3.0.9` |
 | hash | `…\profiles\desktop\pnpm-lock.yaml` → `patch_hash`（第 9 行） | 应与补丁正本 sha256 一致 |
 | 上游落盘 | `…\node_modules\dsh-xiaomi-tts\lib\client.js`、`lib\text-<hash>.js` | 两份都必须含 `stripTtsStyleBlocks`；文本那支名字带构建哈希，**按内容找** |
-| 音色配置 | `…\profiles\desktop\cordis.patch.yml` 的 `xiaomi-mimo-tts` 段 | `voiceDesignPrompt`(:115) / `voiceDesignCustomPrompt`(:123) / `model`(:112) / `readScope`(:133) / `voiceRate`(:145) |
-| 配置备份 | `…\profiles\desktop\cordis.patch.yml.bak-*` | `bak-tts-c-20261014`（音色定稿前）、`bak-firstseg-20261015-0450`（readScope 改动前）、`bak-rate1-20261014-220042` |
+| 音色配置 | `…\profiles\desktop\cordis.patch.yml` 的 `xiaomi-mimo-tts` 段 | `voiceDesignPrompt` / `voiceDesignCustomPrompt`（2026-10-19 现值为 Let Me Go 大肥鱼虚拟歌姬提示词） / `model`(:112) / `readScope`(:133) / `voiceRate`(:145) |
+| 配置备份 | `…\profiles\desktop\cordis.patch.yml.bak-*` | `bak-tts-c-20261014`（音色定稿前）、`bak-firstseg-20261015-0450`（readScope 改动前）、`bak-rate1-20261014-220042`、`bak-letmego-20261019-012846`（Let Me Go 大肥鱼定稿） |
 | 探针 | `D:\DeepSeek Harness\Works\_probe\tts-*` | 见第六章；**在仓库之外** |
 | 装机单 | `D:\DeepSeek Harness\Works\_probe\tts-install-sheet.md` | 含 apiKey，**别上传**；版本号为 10-15 快照，照抄要更新 |
 
