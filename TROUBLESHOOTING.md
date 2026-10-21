@@ -155,6 +155,21 @@
 
 ---
 
+### 1.16 xiaomi-tts 客户端 bundle rev 换代致 404，连坐 5 条未激活（2026-10-20）
+
+- **症状**：启动 DSH 桌面端时前端弹窗或日志报错：
+  ```
+  dsh-xiaomi-tts: import failed: client-modules: could not load "dsh-xiaomi-tts":
+    ...skipped after an earlier failure of this bundle;
+    bundle script plugins/??dsh-xiaomi-tts/client.js&rev=47b1c7b88a1c failed to load
+  Error: web boot: 6 entries did not activate
+  ```
+  且其余 5 条插件（dshmarket、dsh-our-free-model、@michengai/dsh-automation、dsh-codex-subscription、dsh-workbuddy-connect）均带 `skipped after an earlier failure of this bundle`，无具体语法报错堆栈。
+- **原因**：三路取证确认磁盘产物与补丁完全健康，`node --check` 均通过，桩环境 factory 正常返回。病根在于宿主 `client-modules` 的合成 rev 机制：rev 由 `mtimeMs`、`ctimeMs` 与 `size` 计算生成。当依赖文件时间戳变动引起 rev 换代后，浏览器页面仍缓存并请求旧带 rev 的 URL，导致服务端返回 HTTP 404，浏览器 `<script>` 标签触发 `error` 事件并被捕获为 `failed to load`，进而引发 combo bundle 连坐跳过。
+- **解法**：判定为偶发缓存问题，不需要修改任何插件代码或配置。在桌面端执行硬刷新（Ctrl+F5）强制让前端重新向服务端获取带最新 rev 的有效 bundle 脚本即可。
+- **验证**：检查磁盘产物与补丁健康（seq1918/seq2048）；桩环境 factory 执行通过（seq2034）；源码确认 `client.js:581-594` 走的是 `<script>` 的 `error` 事件监听分支而非脚本语法异常；硬刷页面后 6 entries 均正常激活，语音朗读恢复正常。
+- 来源：2026-10-20 会话日志 `seq1918-seq2048`；`dsh-maid-lane-fix/docs/incidents-2026-10-20.md` 第十条。
+
 ## 二、朗读内容问题（念了不该念的、没念标记、念全文、跨行标记）
 
 ### 2.1 念出 CSS：属性表一字不落地念出来
