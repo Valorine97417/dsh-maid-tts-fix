@@ -170,6 +170,23 @@
 - **验证**：检查磁盘产物与补丁健康（seq1918/seq2048）；桩环境 factory 执行通过（seq2034）；源码确认 `client.js:581-594` 走的是 `<script>` 的 `error` 事件监听分支而非脚本语法异常；硬刷页面后 6 entries 均正常激活，语音朗读恢复正常。
 - 来源：2026-10-20 会话日志 `seq1918-seq2048`；`dsh-maid-lane-fix/docs/incidents-2026-10-20.md` 第十条。
 
+---
+
+### 1.17 xiaomi-tts 3.0.9 → 4.2.0 跨大版本升级：33 条锚点只死一条，死在 `apply()` 的挂载行（2026-10-22）
+
+- **症状**：`node scripts/patch.mjs upgrade` 重放时报 `cross-session-mount` 期望 1 实际 0，其余 32 条全中；`verify` 随后报「版本：装着 4.2.0，补丁钉的是 3.0.9」。
+- **原因**（三个层面，只有第一个是真要改代码的）：
+  1. **锚点真的变了**：`MOUNT_FIND` 原来取 `apply()` 里相邻两行 `live.setStateChangeListener(...)` + `local.setStateChangeListener(...)`。4.2.0 给 `live` 那行回调加了 `error` 形参、`updateLivePlayback` 多一个实参（`(sessionId, messageId, status)` → `(sessionId, messageId, status, error)`），而 `local` 那行两版逐字相同 → 两行合起来的锚点整段失配。
+  2. **chunk 改名（不用改锚点，但要认对文件）**：`lib/text-B7NACAYZ.js` → `lib/shared-B5UUgp0Q.js`、`lib/utils-CeeK6Yt6.js` → `lib/utils-CtO70G22.js`、`lib/debug-console-0u5uTAfX.js` 被删；`discoverTargets()` 与 `resolveMarkerFiles()` 都按「哪个文件含 `function removeTtsMarkup(value) {`」认文本那支，所以自动跟上了，补丁正本里的文件名由 `pnpm patch` 按真实产物生成，也不用手改。
+  3. **`patch-commit` 退出码 1 ≠ 补丁没打上**：本机 pnpm 10 的 `ERR_PNPM_IGNORED_BUILDS`（zvec / node-llama-cpp / onnxruntime-node / sharp 四条构建脚本被忽略）会让 `patch-commit` 以 1 退出，`runRebuild()` 于是判定「有步骤失败」，**跳过了把新补丁收进本仓 `patches/` 的那一步**——profile 里 `patches/dsh-xiaomi-tts@4.2.0.patch` 与登记其实都已就位、落盘标记也在。
+- **解法**：
+  - 把 `MOUNT_FIND` 收窄成只取 `local.setStateChangeListener(...)` 那一行（3.0.9 / 4.2.0 逐字相同），`ctx.effect(...)` 插在它**之后**——都在 `apply()` 体内，与插在 `live` 之后等价。这样一份 `lib/edits-v309.js` 同时服务两版，不必新建 `edits-v420.js`（32/33 锚点本就相同，复制 900 行得不偿失）。
+  - 手工把 profile 的 `patches/dsh-xiaomi-tts@4.2.0.patch` 拷回本仓 `patches/`、删掉 `@3.0.9.patch`（备份在 `D:\Works By DSH\_bak-ttsfix-upgrade-*`），再跑 `verify`。
+- **验证**：`verify` 四行全 ✓（登记 4.2.0 / lockfile hash `9976a774…` / 落盘 `lib/shared-B5UUgp0Q.js` / 落盘 `lib/client.js`）；`tts-309-landed-check.mjs` 7/7（client 12/12、shared 4/4 标记）；文本类 6 个 probe（text/card-strip/card-regress/spoken/spoken-pipeline/markup-lenient）72 项 + 播放器类 4 个 probe（cross-session/switch/autoplay-dedup/firstseg）全过。
+- **新增探针**：`_probe/tts-plan-replay.mjs <上游包目录>` —— 对任意上游目录跑真实累积重放、只打印结果不写盘。升版预检用它；`tts-fix-replay-test.mjs` 会先卡「上游版本 == 已安装版本」，预检阶段必然中止。另注意 `normalizeEol(text, needle)` 返回的是**折算后的 needle**，把它当正文用会让每条锚点都「实际命中 1」（`_probe/tts-anchor-audit.mjs` 踩过一次）。
+- **4.2.0 带来的新行为面（重启后要盯）**：① 新增 `TabAudioFocus` 门控，自动播报条件变为 `audioFocus.canPlay()`——只有最近聚焦的同源页面才播；② `DEFAULT_TTS_SETTINGS.announcementSources` 默认 `["dsh-whale-musume","question-titles"]`，可能与「只念 `<!--tts:-->`」叠成双播，需要就在设置页关；③ 新增运行时依赖 `ws@8.21.3`（豆包流式用），profile 拉不到会在 host 侧 import 直接抛。
+- 来源：2026-10-22 本轮实操（子代理报告 `lib/client.js` 189 hunk / `_probe/xiaomi-local/orig420` 干净包对照）；`lib/edits-v309.js:426` 的新注释；`C:\Users\Kayle\.dsh\profiles\desktop\patches\dsh-xiaomi-tts@4.2.0.patch`（26637 字节）。
+
 ## 二、朗读内容问题（念了不该念的、没念标记、念全文、跨行标记）
 
 ### 2.1 念出 CSS：属性表一字不落地念出来
