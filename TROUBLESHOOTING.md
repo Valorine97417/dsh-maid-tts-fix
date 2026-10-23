@@ -187,6 +187,16 @@
 - **4.2.0 带来的新行为面（重启后要盯）**：① 新增 `TabAudioFocus` 门控，自动播报条件变为 `audioFocus.canPlay()`——只有最近聚焦的同源页面才播；② `DEFAULT_TTS_SETTINGS.announcementSources` 默认 `["dsh-whale-musume","question-titles"]`，可能与「只念 `<!--tts:-->`」叠成双播，需要就在设置页关；③ 新增运行时依赖 `ws@8.21.3`（豆包流式用），profile 拉不到会在 host 侧 import 直接抛。
 - 来源：2026-10-22 本轮实操（子代理报告 `lib/client.js` 189 hunk / `_probe/xiaomi-local/orig420` 干净包对照）；`lib/edits-v309.js:426` 的新注释；`C:\Users\Kayle\.dsh\profiles\desktop\patches\dsh-xiaomi-tts@4.2.0.patch`（26637 字节）。
 
+### 1.18 本机 4.2.0 装机被 profile 的 `file:` 依赖 ENOENT 挡住，意图层先行就绪（2026-10-23）
+
+- **症状**：摘掉 `patchedDependencies → dsh-xiaomi-tts@3.0.9`、把 profile 的 `package.json` 改成 `"dsh-xiaomi-tts": "4.2.0"` 后跑 `pnpm install`，在**解析阶段**就退（一个包都没装）：
+  `[ENOENT] ENOENT: no such file or directory, open 'D:\Downloads\dsh-our-free-model-2.5.3.tgz'` + `This error happened while installing a direct dependency of ...profiles\desktop`。
+- **原因**：profile 的 `package.json` 有一条 `"dsh-our-free-model": "file:D:/Downloads/dsh-our-free-model-2.5.3.tgz"`，而该 tarball 不在 `D:\Downloads`（整个目录没有任何 `.tgz`）。pnpm 解析全量依赖图，**一条 `file:` 目标缺失就整次 install 中止**——与 tts 补丁无关，纯属旁观受害。`upgrade` 那条 `ERR_PNPM_PATCH_VERSION_NOT_FOUND` 的提示（§1.9）本身没错，只是它没预见到「升版本这一步先被别人的依赖打死」。
+- **处置**：把 profile 还原成一致状态（`patchedDependencies` 登记回 `dsh-xiaomi-tts@3.0.9`、`package.json` 版本回 `3.0.9`），`verify` 四行全 ✓。升级留待该 `file:` 依赖补回 tarball 或改走 registry 之后再做。**别在 install 半途手工往 `node_modules` 塞 4.2.0**——那会让 lockfile 与落盘分家，`pnpm patch` 又不认不在 lockfile 里的版本。
+- **已就绪的那部分（本轮实证）**：`MOUNT_FIND` 收窄成单行 + `edits.js` 的 `BY_MINOR` 加 `['4.2.0', v309]` 之后，`node _probe/tts-plan-replay.mjs <干净包>` 对**两版都是 33/33**（3.0.9 与 4.2.0 各从 `npm pack` 解包）。即意图层已能服务 4.2.0，剩下的纯粹是「把它装上」这一步。
+- **备份**：`D:\Works By DSH\_bak-ttsfix-upgrade-095450`（`dsh-xiaomi-tts@3.0.9.patch`、`pnpm-workspace.yaml`、`pnpm-lock.yaml`、3.0.9 包源码，共 8.2 MB）。
+- 来源：2026-10-23 本机实操；`pnpm.cjs install --config.minimumReleaseAge=0` 原始报错串；`_probe/tts-plan-replay.mjs`（本轮入库，此前只在 §1.17 里被提到而仓里没有）。
+
 ## 二、朗读内容问题（念了不该念的、没念标记、念全文、跨行标记）
 
 ### 2.1 念出 CSS：属性表一字不落地念出来

@@ -1,11 +1,18 @@
 // 静默行为回归：执行真实观察者与主视图 claim；只 mock stores/timers/音频出口。
 // --installed 检验当前落盘（修复前应复现失败），默认检验维护意图层。
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import vm from 'node:vm'
 import assert from 'node:assert/strict'
 import { buildEdits } from '../lib/edits-v309.js'
 import { EDITS as edits308 } from '../lib/edits-v308.js'
-const installed = fs.readFileSync('C:/Users/Kayle/.dsh/profiles/desktop/node_modules/dsh-xiaomi-tts/lib/client.js', 'utf8')
+// 落盘路径不能写死用户名：2026-10-23 在本机跑时它还是 `C:/Users/Kayle/...`，
+// 换台机器直接 ENOENT，整条静默回归跑不起来。默认按当前用户主目录拼，可用
+// `--profile=<dir>` 覆盖（接手别人的排障现场时用）。
+const profileArg = process.argv.find((a) => a.startsWith('--profile='))
+const profileDir = profileArg ? profileArg.slice('--profile='.length) : path.join(os.homedir(), '.dsh', 'profiles', 'desktop')
+const installed = fs.readFileSync(path.join(profileDir, 'node_modules', 'dsh-xiaomi-tts', 'lib', 'client.js'), 'utf8')
 const marker = 'function installCrossSessionAutoPlay(ctx, playback, scope) {'
 const from = installed.indexOf(marker)
 const original = installed.slice(from, installed.indexOf('\n}\n', from) + 2)
